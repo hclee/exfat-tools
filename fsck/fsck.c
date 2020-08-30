@@ -425,7 +425,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 	if ((node->size == 0 && node->first_clus != EXFAT_FREE_CLUSTER) ||
 		(node->size > 0 && !heap_clus(exfat, node->first_clus))) {
 		if (repair_file_ask(&exfat->de_iter, node,
-			ER_FILE_FIRST_CLUS, "first cluster is wrong"))
+			ER_FILE_FIRST_CLUS, "the first cluster #x is wrong"))
 			goto truncate_file;
 		else
 			return -EINVAL;
@@ -1125,6 +1125,7 @@ static int read_children(struct exfat *exfat, struct exfat_inode *dir)
 	struct exfat_dentry *dentry;
 	int dentry_count;
 	struct exfat_de_iter *de_iter;
+	int errors = 0;
 
 	de_iter = &exfat->de_iter;
 	ret = exfat_de_iter_init(de_iter, exfat, dir);
@@ -1150,7 +1151,11 @@ static int read_children(struct exfat *exfat, struct exfat_inode *dir)
 			ret = read_file(de_iter, &node, &dentry_count);
 			if (ret < 0) {
 				exfat_stat.error_count++;
-				goto err;
+				if (ret != -EINVAL)
+					goto err;
+				dentry_count = 1;
+				de_iter->max_skip_dentries = 1;
+				goto next;
 			} else if (ret) {
 				exfat_stat.error_count++;
 				exfat_stat.fixed_count++;
@@ -1191,16 +1196,18 @@ static int read_children(struct exfat *exfat, struct exfat_inode *dir)
 		default:
 			if (IS_EXFAT_DELETED(dentry->type))
 				break;
-			exfat_err("unknown entry type. 0x%x\n", dentry->type);
+			exfat_debug("unknown entry type. 0x%x\n",
+					dentry->type);
 			ret = -EINVAL;
-			goto err;
+			break;
 		}
-
+next:
+		errors = ret != 0 ? ret : errors;
 		exfat_de_iter_advance(de_iter, dentry_count);
 	}
 out:
 	exfat_de_iter_flush(de_iter);
-	return 0;
+	return errors;
 err:
 	inode_free_children(dir, false);
 	INIT_LIST_HEAD(&dir->children);
@@ -1362,7 +1369,7 @@ static int exfat_filesystem_check(struct exfat *exfat)
 		dir_errors = read_children(exfat, dir);
 		if (dir_errors) {
 			resolve_path(&path_resolve_ctx, dir);
-			exfat_debug("failed to check dentries: %s\n",
+			exfat_debug("there are invalid directory entries: %s\n",
 					path_resolve_ctx.local_path);
 			ret = dir_errors;
 		}
