@@ -1,0 +1,27 @@
+.TH exfatfsck 8
+.SH NAME
+exfatfsck \- check an exFAT filesystem
+.SH SYNOPSIS
+.B exfatfsck
+[
+.B \-t seconds
+] [
+.B options for fsck.exfat (8)
+]
+.br
+.B exfatfsck \-V
+.SH DESCRIPTION
+.B exfatfsck
+executes fsck.exfat (8) depending on the options passed.
+Any other options are passed to fsck.exfat (8)
+.PP
+.SH OPTIONS
+.TP
+.BI \-t " seconds"
+Terminate fsck.exfat (8) if it runs over the specified time.
+.TP
+.BI \-V
+Prints the version number and exits.
+.SH SEE ALSO
+.BR fsck (8),
+.BR fsck.exfat (8)
