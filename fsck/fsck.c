@@ -15,6 +15,10 @@
 
 #include "exfat_ondisk.h"
 #include "libexfat.h"
+
+#include "inode.h"
+#include "exfat_fs.h"
+#include "de_iter.h"
 #include "fsck.h"
 #include "repair.h"
 
@@ -24,24 +28,6 @@ struct fsck_user_input {
 };
 
 #define EXFAT_MAX_UPCASE_CHARS	0x10000
-
-#ifdef WORDS_BIGENDIAN
-typedef __u8	bitmap_t;
-#else
-typedef __u32	bitmap_t;
-#endif
-
-#define BITS_PER	(sizeof(bitmap_t) * 8)
-#define BIT_MASK(__c)	(1 << ((__c) % BITS_PER))
-#define BIT_ENTRY(__c)	((__c) / BITS_PER)
-
-#define EXFAT_BITMAP_SIZE(__c_count)	\
-	(DIV_ROUND_UP(__c_count, BITS_PER) * sizeof(bitmap_t))
-#define EXFAT_BITMAP_GET(__bmap, __c)	\
-			(((bitmap_t *)(__bmap))[BIT_ENTRY(__c)] & BIT_MASK(__c))
-#define EXFAT_BITMAP_SET(__bmap, __c)	\
-			(((bitmap_t *)(__bmap))[BIT_ENTRY(__c)] |= \
-			 BIT_MASK(__c))
 
 #define FSCK_EXIT_NO_ERRORS		0x00
 #define FSCK_EXIT_CORRECTED		0x01
@@ -59,12 +45,7 @@ struct exfat_stat {
 	long		fixed_count;
 };
 
-struct path_resolve_ctx {
-	struct exfat_inode	*ancestors[255];
-	__le16			utf16_path[PATH_MAX + 2];
-	char			local_path[PATH_MAX * MB_LEN_MAX + 1];
-};
-
+struct exfat_fsck exfat_fsck;
 struct exfat_stat exfat_stat;
 struct path_resolve_ctx path_resolve_ctx;
 
@@ -104,312 +85,21 @@ static void usage(char *name)
 			##__VA_ARGS__);			\
 })
 
-static struct exfat_inode *alloc_exfat_inode(__u16 attr)
-{
-	struct exfat_inode *node;
-	int size;
-
-	size = offsetof(struct exfat_inode, name) + NAME_BUFFER_SIZE;
-	node = (struct exfat_inode *)calloc(1, size);
-	if (!node) {
-		exfat_err("failed to allocate exfat_node\n");
-		return NULL;
-	}
-
-	node->parent = NULL;
-	INIT_LIST_HEAD(&node->children);
-	INIT_LIST_HEAD(&node->sibling);
-	INIT_LIST_HEAD(&node->list);
-
-	node->last_pclus = EXFAT_EOF_CLUSTER;
-	node->attr = attr;
-	if (attr & ATTR_SUBDIR)
-		exfat_stat.dir_count++;
-	else
-		exfat_stat.file_count++;
-	return node;
-}
-
-static void free_exfat_inode(struct exfat_inode *node)
-{
-	free(node);
-}
-
-static void inode_free_children(struct exfat_inode *dir, bool file_only)
-{
-	struct exfat_inode *node, *i;
-
-	list_for_each_entry_safe(node, i, &dir->children, sibling) {
-		if (file_only) {
-			if (!(node->attr & ATTR_SUBDIR)) {
-				list_del(&node->sibling);
-				free_exfat_inode(node);
-			}
-		} else {
-			list_del(&node->sibling);
-			list_del(&node->list);
-			free_exfat_inode(node);
-		}
-	}
-}
-
-static void inode_free_file_children(struct exfat_inode *dir)
-{
-	inode_free_children(dir, true);
-}
-
-/* delete @child and all ancestors that does not have
- * children
- */
-static void inode_free_ancestors(struct exfat_inode *child)
-{
-	struct exfat_inode *parent;
-
-	if (!list_empty(&child->children))
-		return;
-
-	do {
-		if (!(child->attr & ATTR_SUBDIR)) {
-			exfat_err("not directory.\n");
-			return;
-		}
-
-		parent = child->parent;
-		list_del(&child->sibling);
-		free_exfat_inode(child);
-
-		child = parent;
-	} while (child && list_empty(&child->children));
-
-	return;
-}
-
-static void free_exfat(struct exfat *exfat)
-{
-	int i;
-
-	if (exfat) {
-		if (exfat->bs)
-			free(exfat->bs);
-		if (exfat->alloc_bitmap)
-			free(exfat->alloc_bitmap);
-		if (exfat->disk_bitmap)
-			free(exfat->disk_bitmap);
-		for (i = 0; i < 2; i++) {
-			if (exfat->buffer_desc[i].buffer)
-				free(exfat->buffer_desc[i].buffer);
-			if (exfat->buffer_desc[i].dirty)
-				free(exfat->buffer_desc[i].dirty);
-		}
-		free(exfat);
-	}
-}
-
-static int init_exfat(struct exfat *exfat, struct pbr *bs)
-{
-	int i;
-
-	INIT_LIST_HEAD(&exfat->dir_list);
-	exfat->bs = bs;
-	exfat->clus_count = le32_to_cpu(bs->bsx.clu_count);
-	exfat->clus_size = EXFAT_CLUSTER_SIZE(bs);
-	exfat->sect_size = EXFAT_SECTOR_SIZE(bs);
-
-	/* TODO: bitmap could be very large. */
-	exfat->alloc_bitmap = (char *)calloc(1,
-			EXFAT_BITMAP_SIZE(exfat->clus_count));
-	if (!exfat->alloc_bitmap) {
-		exfat_err("failed to allocate bitmap\n");
-		goto err;
-	}
-
-	exfat->disk_bitmap = (char *)malloc(
-				EXFAT_BITMAP_SIZE(exfat->clus_count));
-	if (!exfat->disk_bitmap) {
-		exfat_err("failed to allocate bitmap\n");
-		goto err;
-	}
-
-	/* allocate cluster buffers */
-	for (i = 0; i < 2; i++) {
-		exfat->buffer_desc[i].buffer =
-			(char *)malloc(exfat->clus_size);
-		if (!exfat->buffer_desc[i].buffer)
-			goto err;
-		exfat->buffer_desc[i].dirty =
-			(char *)calloc(
-			(exfat->clus_size / exfat->sect_size), 1);
-		if (!exfat->buffer_desc[i].dirty)
-			goto err;
-	}
-	return 0;
-err:
-	free_exfat(exfat);
-	return -ENOMEM;
-}
-
-static void exfat_free_dir_list(struct exfat *exfat)
-{
-	struct exfat_inode *dir, *i;
-
-	list_for_each_entry_safe(dir, i, &exfat->dir_list, list) {
-		inode_free_file_children(dir);
-		list_del(&dir->list);
-		free_exfat_inode(dir);
-	}
-}
-
-/*
- * get references of ancestors that include @child until the count of
- * ancesters is not larger than @count and the count of characters of
- * their names is not larger than @max_char_len.
- * return true if root is reached.
- */
-bool get_ancestors(struct exfat_inode *child,
-		struct exfat_inode **ancestors, int count,
-		int max_char_len,
-		int *ancestor_count)
-{
-	struct exfat_inode *dir;
-	int name_len, char_len;
-	int root_depth, depth, i;
-
-	root_depth = 0;
-	char_len = 0;
-	max_char_len += 1;
-
-	dir = child;
-	while (dir) {
-		name_len = exfat_utf16_len(dir->name, NAME_BUFFER_SIZE);
-		if (char_len + name_len > max_char_len)
-			break;
-
-		/* include '/' */
-		char_len += name_len + 1;
-		root_depth++;
-
-		dir = dir->parent;
-	}
-
-	depth = MIN(root_depth, count);
-
-	for (dir = child, i = depth - 1; i >= 0; dir = dir->parent, i--)
-		ancestors[i] = dir;
-
-	*ancestor_count = depth;
-	return dir == NULL;
-}
-
-static int resolve_path(struct path_resolve_ctx *ctx, struct exfat_inode *child)
-{
-	int depth, i;
-	int name_len;
-	__le16 *utf16_path;
-	static const __le16 utf16_slash = cpu_to_le16(0x002F);
-	static const __le16 utf16_null = cpu_to_le16(0x0000);
-	size_t in_size;
-
-	ctx->local_path[0] = '\0';
-
-	get_ancestors(child,
-			ctx->ancestors,
-			sizeof(ctx->ancestors) / sizeof(ctx->ancestors[0]),
-			PATH_MAX,
-			&depth);
-
-	utf16_path = ctx->utf16_path;
-	for (i = 0; i < depth; i++) {
-		name_len = exfat_utf16_len(ctx->ancestors[i]->name,
-				NAME_BUFFER_SIZE);
-		memcpy((char *)utf16_path, (char *)ctx->ancestors[i]->name,
-				name_len * 2);
-		utf16_path += name_len;
-		memcpy((char *)utf16_path, &utf16_slash, sizeof(utf16_slash));
-		utf16_path++;
-	}
-
-	if (depth > 0)
-		utf16_path--;
-	memcpy((char *)utf16_path, &utf16_null, sizeof(utf16_null));
-	utf16_path++;
-
-	in_size = (utf16_path - ctx->utf16_path) * sizeof(__le16);
-	return exfat_utf16_dec(ctx->utf16_path, in_size,
-				ctx->local_path, sizeof(ctx->local_path));
-}
-
-static int resolve_path_parent(struct path_resolve_ctx *ctx,
-			struct exfat_inode *parent, struct exfat_inode *child)
-{
-	int ret;
-	struct exfat_inode *old;
-
-	old = child->parent;
-	child->parent = parent;
-
-	ret = resolve_path(ctx, child);
-	child->parent = old;
-	return ret;
-}
 
 #define repair_file_ask(iter, inode, code, fmt, ...)	\
 ({							\
 		resolve_path_parent(&path_resolve_ctx,	\
 				(iter)->parent, inode);	\
-		exfat_repair_ask((iter)->exfat, code,	\
+		exfat_repair_ask(&exfat_fsck, code,	\
 			"ERROR: %s: " fmt,		\
 			path_resolve_ctx.local_path,	\
 			##__VA_ARGS__);			\
 })
 
-static inline bool heap_clus(struct exfat *exfat, clus_t clus)
+static int check_clus_chain(struct exfat_de_iter *de_iter,
+			    struct exfat_inode *node)
 {
-	return clus >= EXFAT_FIRST_CLUSTER &&
-		(clus - EXFAT_FIRST_CLUSTER) < exfat->clus_count;
-}
-
-int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
-				clus_t clus, clus_t *next)
-{
-	off_t offset;
-
-	*next = EXFAT_EOF_CLUSTER;
-
-	if (!heap_clus(exfat, clus))
-		return -EINVAL;
-
-	if (node->is_contiguous) {
-		*next = clus + 1;
-		return 0;
-	}
-
-	offset = (off_t)le32_to_cpu(exfat->bs->bsx.fat_offset) <<
-				exfat->bs->bsx.sect_size_bits;
-	offset += sizeof(clus_t) * clus;
-
-	if (exfat_read(exfat->blk_dev->dev_fd, next, sizeof(*next), offset)
-			!= sizeof(*next))
-		return -EIO;
-	*next = le32_to_cpu(*next);
-	return 0;
-}
-
-static int set_fat(struct exfat *exfat, clus_t clus, clus_t next_clus)
-{
-	off_t offset;
-
-	offset = le32_to_cpu(exfat->bs->bsx.fat_offset) <<
-		exfat->bs->bsx.sect_size_bits;
-	offset += sizeof(clus_t) * clus;
-
-	if (exfat_write(exfat->blk_dev->dev_fd, &next_clus, sizeof(next_clus),
-			offset) != sizeof(next_clus))
-		return -EIO;
-	return 0;
-}
-
-static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
-{
+	struct exfat *exfat = de_iter->exfat;
 	struct exfat_dentry *stream_de;
 	clus_t clus, prev, next;
 	uint64_t count, max_count;
@@ -425,7 +115,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 	/* the first cluster is wrong */
 	if ((node->size == 0 && node->first_clus != EXFAT_FREE_CLUSTER) ||
 		(node->size > 0 && !heap_clus(exfat, node->first_clus))) {
-		if (repair_file_ask(&exfat->de_iter, node,
+		if (repair_file_ask(de_iter, node,
 			ER_FILE_FIRST_CLUS, "first cluster is wrong"))
 			goto truncate_file;
 		else
@@ -436,7 +126,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 		if (count >= max_count) {
 			if (node->is_contiguous)
 				break;
-			if (repair_file_ask(&exfat->de_iter, node,
+			if (repair_file_ask(de_iter, node,
 					ER_FILE_SMALLER_SIZE,
 					"more clusters are allocated. "
 					"truncate to %" PRIu64 " bytes",
@@ -452,7 +142,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 		 */
 		if (EXFAT_BITMAP_GET(exfat->alloc_bitmap,
 				clus - EXFAT_FIRST_CLUSTER)) {
-			if (repair_file_ask(&exfat->de_iter, node,
+			if (repair_file_ask(de_iter, node,
 					ER_FILE_DUPLICATED_CLUS,
 					"cluster is already allocated for "
 					"the other file. truncated to %"
@@ -465,7 +155,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 
 		if (!EXFAT_BITMAP_GET(exfat->disk_bitmap,
 				clus - EXFAT_FIRST_CLUSTER)) {
-			if (repair_file_ask(&exfat->de_iter, node,
+			if (repair_file_ask(de_iter, node,
 					ER_FILE_INVALID_CLUS,
 					"cluster is marked as free. truncate to %" PRIu64 " bytes",
 					count * exfat->clus_size))
@@ -481,7 +171,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 		if (!node->is_contiguous) {
 			if (!heap_clus(exfat, next) &&
 					next != EXFAT_EOF_CLUSTER) {
-				if (repair_file_ask(&exfat->de_iter, node,
+				if (repair_file_ask(de_iter, node,
 						ER_FILE_INVALID_CLUS,
 						"broken cluster chain. "
 						"truncate to %"
@@ -502,7 +192,7 @@ static int check_clus_chain(struct exfat *exfat, struct exfat_inode *node)
 	}
 
 	if (count < max_count) {
-		if (repair_file_ask(&exfat->de_iter, node,
+		if (repair_file_ask(de_iter, node,
 			ER_FILE_LARGER_SIZE, "less clusters are allocated. "
 			"truncates to %" PRIu64 " bytes",
 			count * exfat->clus_size))
@@ -517,7 +207,7 @@ truncate_file:
 	if (!heap_clus(exfat, prev))
 		node->first_clus = EXFAT_FREE_CLUSTER;
 
-	exfat_de_iter_get_dirty(&exfat->de_iter, 1, &stream_de);
+	exfat_de_iter_get_dirty(de_iter, 1, &stream_de);
 	if (count * exfat->clus_size <
 			le64_to_cpu(stream_de->stream_valid_size))
 		stream_de->stream_valid_size = cpu_to_le64(
@@ -569,21 +259,6 @@ static bool root_get_clus_count(struct exfat *exfat, struct exfat_inode *node,
 	return true;
 }
 
-static off_t exfat_s2o(struct exfat *exfat, off_t sect)
-{
-	return sect << exfat->bs->bsx.sect_size_bits;
-}
-
-off_t exfat_c2o(struct exfat *exfat, unsigned int clus)
-{
-	if (clus < EXFAT_FIRST_CLUSTER)
-		return ~0L;
-
-	return exfat_s2o(exfat, le32_to_cpu(exfat->bs->bsx.clu_offset) +
-				((off_t)(clus - EXFAT_FIRST_CLUSTER) <<
-				 exfat->bs->bsx.sect_per_clus_bits));
-}
-
 static int boot_region_checksum(int dev_fd,
 				int bs_offset, unsigned int sect_size)
 {
@@ -632,9 +307,6 @@ out:
 static int exfat_mark_volume_dirty(struct exfat *exfat, bool dirty)
 {
 	uint16_t flags;
-
-	if (!(exfat->options & FSCK_OPTS_REPAIR_WRITE))
-		return 0;
 
 	flags = le16_to_cpu(exfat->bs->bsx.vol_flags);
 	if (dirty)
@@ -782,7 +454,8 @@ free_sector:
 	return ret;
 }
 
-static int exfat_boot_region_check(struct exfat *exfat, struct pbr **bs)
+static int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
+				   struct pbr **bs)
 {
 	struct pbr *boot_sect;
 	unsigned int sect_size;
@@ -793,7 +466,7 @@ static int exfat_boot_region_check(struct exfat *exfat, struct pbr **bs)
 	if (boot_sect == NULL)
 		return -ENOMEM;
 
-	if (exfat_read(exfat->blk_dev->dev_fd, boot_sect,
+	if (exfat_read(blkdev->dev_fd, boot_sect,
 		       sizeof(*boot_sect), 0) != (ssize_t)sizeof(*boot_sect)) {
 		exfat_err("failed to read Main boot sector\n");
 		return -EIO;
@@ -803,16 +476,16 @@ static int exfat_boot_region_check(struct exfat *exfat, struct pbr **bs)
 	free(boot_sect);
 
 	/* check boot regions */
-	ret = read_boot_region(exfat->blk_dev, bs,
+	ret = read_boot_region(blkdev, bs,
 			       BOOT_SEC_IDX, sect_size, true);
-	if (ret == -EINVAL && exfat_repair_ask(exfat, ER_BS_BOOT_REGION,
+	if (ret == -EINVAL && exfat_repair_ask(&exfat_fsck, ER_BS_BOOT_REGION,
 				"boot region is corrupted. try to restore the region from backup"
 				)) {
 		const unsigned int sector_sizes[] = {512, 4096, 1024, 2048};
 		unsigned int i;
 
 		if (sect_size >= 512 && sect_size <= EXFAT_MAX_SECTOR_SIZE) {
-			ret = read_boot_region(exfat->blk_dev, bs,
+			ret = read_boot_region(blkdev, bs,
 					       BACKUP_BOOT_SEC_IDX, sect_size,
 					       false);
 			if (!ret)
@@ -823,7 +496,7 @@ static int exfat_boot_region_check(struct exfat *exfat, struct pbr **bs)
 			if (sector_sizes[i] == sect_size)
 				continue;
 
-			ret = read_boot_region(exfat->blk_dev, bs,
+			ret = read_boot_region(blkdev, bs,
 					       BACKUP_BOOT_SEC_IDX,
 					       sector_sizes[i], false);
 			if (!ret) {
@@ -836,7 +509,7 @@ static int exfat_boot_region_check(struct exfat *exfat, struct pbr **bs)
 
 	return ret;
 restore:
-	ret = restore_boot_region(exfat->blk_dev, sect_size);
+	ret = restore_boot_region(blkdev, sect_size);
 	if (ret) {
 		exfat_err("failed to restore boot region from backup\n");
 		free(*bs);
@@ -892,7 +565,7 @@ static int check_inode(struct exfat_de_iter *iter, struct exfat_inode *node)
 	uint16_t checksum;
 	bool valid = true;
 
-	ret = check_clus_chain(exfat, node);
+	ret = check_clus_chain(iter, node);
 	if (ret < 0)
 		return ret;
 
@@ -1029,6 +702,10 @@ static int read_file(struct exfat_de_iter *de_iter,
 		return -EINVAL;
 	}
 
+	if (node->attr & ATTR_SUBDIR)
+		exfat_stat.dir_count++;
+	else
+		exfat_stat.file_count++;
 	*new_node = node;
 	return ret;
 }
@@ -1062,29 +739,16 @@ static bool read_volume_label(struct exfat_de_iter *iter)
 	return true;
 }
 
-static void exfat_bitmap_set_range(struct exfat *exfat,
-			clus_t start_clus, clus_t count)
-{
-	clus_t clus;
-
-	if (!heap_clus(exfat, start_clus) ||
-		!heap_clus(exfat, start_clus + count))
-		return;
-
-	clus = start_clus;
-	while (clus < start_clus + count) {
-		EXFAT_BITMAP_SET(exfat->alloc_bitmap,
-				clus - EXFAT_FIRST_CLUSTER);
-		clus++;
-	}
-}
-
 static bool read_bitmap(struct exfat_de_iter *iter)
 {
 	struct exfat_dentry *dentry;
 	struct exfat *exfat;
 
 	exfat = iter->exfat;
+
+	if (heap_clus(exfat, exfat->disk_bitmap_clus))
+		return true;
+
 	if (exfat_de_iter_get(iter, 0, &dentry))
 		return false;
 
@@ -1178,16 +842,17 @@ static bool read_upcase_table(struct exfat_de_iter *iter)
 	return true;
 }
 
-static int read_children(struct exfat *exfat, struct exfat_inode *dir)
+static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 {
-	int ret;
+	struct exfat *exfat = fsck->exfat;
 	struct exfat_inode *node = NULL;
 	struct exfat_dentry *dentry;
-	int dentry_count;
 	struct exfat_de_iter *de_iter;
+	int dentry_count;
+	int ret;
 
-	de_iter = &exfat->de_iter;
-	ret = exfat_de_iter_init(de_iter, exfat, dir);
+	de_iter = &fsck->de_iter;
+	ret = exfat_de_iter_init(de_iter, exfat, dir, fsck->buffer_desc);
 	if (ret == EOF)
 		return 0;
 	else if (ret)
@@ -1268,8 +933,9 @@ err:
 	return ret;
 }
 
-static int write_dirty_fat(struct exfat *exfat)
+static int write_dirty_fat(struct exfat_fsck *fsck)
 {
+	struct exfat *exfat = fsck->exfat;
 	struct buffer_desc *bd;
 	off_t offset;
 	ssize_t len;
@@ -1279,7 +945,7 @@ static int write_dirty_fat(struct exfat *exfat)
 
 	clus = 0;
 	last_clus = le32_to_cpu(exfat->bs->bsx.clu_count) + 2;
-	bd = exfat->buffer_desc;
+	bd = fsck->buffer_desc;
 	idx = 0;
 	offset = le32_to_cpu(exfat->bs->bsx.fat_offset) *
 		exfat->sect_size;
@@ -1332,8 +998,9 @@ static int write_dirty_fat(struct exfat *exfat)
 	return 0;
 }
 
-static int write_dirty_bitmap(struct exfat *exfat)
+static int write_dirty_bitmap(struct exfat_fsck *fsck)
 {
+	struct exfat *exfat = fsck->exfat;
 	struct buffer_desc *bd;
 	off_t offset, last_offset, bitmap_offset;
 	ssize_t len;
@@ -1346,7 +1013,7 @@ static int write_dirty_bitmap(struct exfat *exfat)
 	read_size = exfat->clus_size;
 	write_size = exfat->sect_size;
 
-	bd = exfat->buffer_desc;
+	bd = fsck->buffer_desc;
 	idx = 0;
 
 	while (offset < last_offset) {
@@ -1376,13 +1043,13 @@ static int write_dirty_bitmap(struct exfat *exfat)
 	return 0;
 }
 
-static int reclaim_free_clusters(struct exfat *exfat)
+static int reclaim_free_clusters(struct exfat_fsck *fsck)
 {
-	if (write_dirty_fat(exfat)) {
+	if (write_dirty_fat(fsck)) {
 		exfat_err("failed to write fat entries\n");
 		return -EIO;
 	}
-	if (write_dirty_bitmap(exfat)) {
+	if (write_dirty_bitmap(fsck)) {
 		exfat_err("failed to write bitmap\n");
 		return -EIO;
 	}
@@ -1396,8 +1063,9 @@ static int reclaim_free_clusters(struct exfat *exfat)
  * 2. free all of file exfat_nodes.
  * 3. if the directory does not have children, free its exfat_node.
  */
-static int exfat_filesystem_check(struct exfat *exfat)
+static int exfat_filesystem_check(struct exfat_fsck *fsck)
 {
+	struct exfat *exfat = fsck->exfat;
 	struct exfat_inode *dir;
 	int ret = 0, dir_errors;
 
@@ -1409,7 +1077,8 @@ static int exfat_filesystem_check(struct exfat *exfat)
 	list_add(&exfat->root->list, &exfat->dir_list);
 
 	while (!list_empty(&exfat->dir_list)) {
-		dir = list_entry(exfat->dir_list.next, struct exfat_inode, list);
+		dir = list_entry(exfat->dir_list.next,
+				 struct exfat_inode, list);
 
 		if (!(dir->attr & ATTR_SUBDIR)) {
 			fsck_err(dir->parent, dir,
@@ -1419,7 +1088,7 @@ static int exfat_filesystem_check(struct exfat *exfat)
 			goto out;
 		}
 
-		dir_errors = read_children(exfat, dir);
+		dir_errors = read_children(fsck, dir);
 		if (dir_errors) {
 			resolve_path(&path_resolve_ctx, dir);
 			exfat_debug("failed to check dentries: %s\n",
@@ -1434,7 +1103,7 @@ static int exfat_filesystem_check(struct exfat *exfat)
 out:
 	exfat_free_dir_list(exfat);
 	exfat->root = NULL;
-	if (exfat->dirty_fat && reclaim_free_clusters(exfat))
+	if (fsck->dirty_fat && reclaim_free_clusters(fsck))
 		return -EIO;
 	return ret;
 }
@@ -1459,6 +1128,7 @@ static int exfat_root_dir_check(struct exfat *exfat)
 	root->size = clus_count * exfat->clus_size;
 
 	exfat->root = root;
+	exfat_stat.dir_count++;
 	exfat_debug("root directory: start cluster[0x%x] size[0x%" PRIx64 "]\n",
 		root->first_clus, root->size);
 	return 0;
@@ -1489,9 +1159,11 @@ static char *bytes_to_human_readable(size_t bytes)
 	return buf;
 }
 
-static void exfat_show_info(struct exfat *exfat, const char *dev_name,
+static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name,
 			int errors)
 {
+	struct exfat *exfat = fsck->exfat;
+
 	exfat_info("sector size:  %s\n",
 		bytes_to_human_readable(1 << exfat->bs->bsx.sect_size_bits));
 	exfat_info("cluster size: %s\n",
@@ -1502,7 +1174,7 @@ static void exfat_show_info(struct exfat *exfat, const char *dev_name,
 	printf("%s: %s. directories %ld, files %ld\n", dev_name,
 			errors ? "checking stopped" : "clean",
 			exfat_stat.dir_count, exfat_stat.file_count);
-	if (errors || exfat->dirty)
+	if (errors || fsck->dirty)
 		printf("%s: files corrupted %ld, files fixed %ld\n", dev_name,
 			exfat_stat.error_count, exfat_stat.fixed_count);
 }
@@ -1511,7 +1183,6 @@ int main(int argc, char * const argv[])
 {
 	struct fsck_user_input ui;
 	struct exfat_blk_dev bd;
-	struct exfat *exfat = NULL;
 	struct pbr *bs = NULL;
 	int c, ret, exit_code;
 	bool version_only = false;
@@ -1575,6 +1246,8 @@ int main(int argc, char * const argv[])
 		ui.ei.writeable = false;
 	}
 
+	exfat_fsck.options = ui.options;
+
 	snprintf(ui.ei.dev_name, sizeof(ui.ei.dev_name), "%s", argv[optind]);
 	ret = exfat_get_blk_dev_info(&ui.ei, &bd);
 	if (ret < 0) {
@@ -1582,37 +1255,39 @@ int main(int argc, char * const argv[])
 		return FSCK_EXIT_OPERATION_ERROR;
 	}
 
-	exfat = (struct exfat *)calloc(1, sizeof(*exfat));
-	if (!exfat) {
-		exfat_err("failed to allocate exfat\n");
+	ret = exfat_boot_region_check(&bd, &bs);
+	if (ret)
+		goto err;
+
+	exfat_fsck.exfat = exfat_alloc_exfat(&bd, bs);
+	if (!exfat_fsck.exfat) {
 		ret = -ENOMEM;
 		goto err;
 	}
-	exfat->blk_dev = &bd;
-	exfat->options = ui.options;
 
-	ret = exfat_boot_region_check(exfat, &bs);
-	if (ret)
+	exfat_fsck.buffer_desc = exfat_alloc_buffer(2,
+					exfat_fsck.exfat->clus_size,
+					exfat_fsck.exfat->sect_size);
+	if (!exfat_fsck.buffer_desc) {
+		ret = -ENOMEM;
 		goto err;
+	}
 
-	ret = init_exfat(exfat, bs);
-	if (ret)
-		goto err;
-
-	if (exfat_mark_volume_dirty(exfat, true)) {
+	if ((exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) &&
+	    exfat_mark_volume_dirty(exfat_fsck.exfat, true)) {
 		ret = -EIO;
 		goto err;
 	}
 
 	exfat_debug("verifying root directory...\n");
-	ret = exfat_root_dir_check(exfat);
+	ret = exfat_root_dir_check(exfat_fsck.exfat);
 	if (ret) {
 		exfat_err("failed to verify root directory.\n");
 		goto out;
 	}
 
 	exfat_debug("verifying directory entries...\n");
-	ret = exfat_filesystem_check(exfat);
+	ret = exfat_filesystem_check(&exfat_fsck);
 	if (ret)
 		goto out;
 
@@ -1621,21 +1296,25 @@ int main(int argc, char * const argv[])
 		ret = -EIO;
 		goto out;
 	}
-	exfat_mark_volume_dirty(exfat, false);
+	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE)
+		exfat_mark_volume_dirty(exfat_fsck.exfat, false);
 
 out:
-	exfat_show_info(exfat, ui.ei.dev_name, ret);
+	exfat_show_info(&exfat_fsck, ui.ei.dev_name, ret);
 err:
 	if (ret == -EINVAL)
 		exit_code = FSCK_EXIT_ERRORS_LEFT;
 	else if (ret)
 		exit_code = FSCK_EXIT_OPERATION_ERROR;
-	else if (exfat->dirty)
+	else if (exfat_fsck.dirty)
 		exit_code = FSCK_EXIT_CORRECTED;
 	else
 		exit_code = FSCK_EXIT_NO_ERRORS;
 
-	free_exfat(exfat);
+	if (exfat_fsck.buffer_desc)
+		exfat_free_buffer(exfat_fsck.buffer_desc, 2);
+	if (exfat_fsck.exfat)
+		exfat_free_exfat(exfat_fsck.exfat);
 	close(bd.dev_fd);
 	return exit_code;
 }
