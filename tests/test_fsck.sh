@@ -2,7 +2,7 @@
 
 TESTCASE_DIR=$1
 IMAGE_FILE=exfat.img
-FSCK_PROG=../build/sbin/fsck.exfat
+FSCK_PROG=fsck.exfat
 FSCK_OPTS=-y
 PASS_COUNT=0
 
