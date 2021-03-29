@@ -6,10 +6,27 @@
 #define _EXFAT_FS_H
 
 struct exfat;
+struct exfat_de_iter;
 
-#define EXFAT_CLUSTER_SIZE(pbr) (1 << ((pbr)->bsx.sect_size_bits +	\
-					(pbr)->bsx.sect_per_clus_bits))
-#define EXFAT_SECTOR_SIZE(pbr) (1 << (pbr)->bsx.sect_size_bits)
+struct exfat_lookup_filter {
+	struct {
+		uint8_t		type;
+		/* return 0 if matched, return 1 if not matched,
+		 * otherwise return errno
+		 */
+		int		(*filter)(struct exfat_de_iter *iter,
+					void *param, int *dentry_count);
+		void		*param;
+	} in;
+	struct {
+		struct exfat_dentry	*dentry_set;
+		int			dentry_count;
+		/* device offset where the dentry_set locates, or
+		 * the empty slot locates or EOF if not found.
+		 */
+		off_t			dentry_d_offset;
+	} out;
+};
 
 #ifdef WORDS_BIGENDIAN
 typedef __u8	bitmap_t;
@@ -29,8 +46,12 @@ typedef __u32	bitmap_t;
 			(((bitmap_t *)(__bmap))[BIT_ENTRY(__c)] |= \
 			 BIT_MASK(__c))
 
-void exfat_bitmap_set_range(struct exfat *exfat, clus_t start_clus,
-			    clus_t count);
+void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
+			    clus_t start_clus, clus_t count);
+
+#define EXFAT_CLUSTER_SIZE(pbr) (1 << ((pbr)->bsx.sect_size_bits +	\
+					(pbr)->bsx.sect_per_clus_bits))
+#define EXFAT_SECTOR_SIZE(pbr) (1 << (pbr)->bsx.sect_size_bits)
 
 static inline off_t exfat_s2o(struct exfat *exfat, off_t sect)
 {
@@ -57,5 +78,8 @@ int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
 				clus_t clus, clus_t *next);
 int set_fat(struct exfat *exfat, clus_t clus, clus_t next_clus);
 
+/* lookup.c */
+int exfat_lookup_dentry_set(struct exfat *exfat, struct exfat_inode *parent,
+			  struct exfat_lookup_filter *filter);
 
 #endif
