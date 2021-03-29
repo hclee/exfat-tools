@@ -295,13 +295,9 @@ int exfat_de_iter_flush(struct exfat_de_iter *iter)
 	return 0;
 }
 
-/*
- * @skip_dentries must be the largest @ith + 1 of exfat_de_iter_get
- * since the last call of exfat_de_iter_advance
- */
 int exfat_de_iter_advance(struct exfat_de_iter *iter, int skip_dentries)
 {
-	if (skip_dentries != iter->max_skip_dentries)
+	if (skip_dentries > iter->max_skip_dentries)
 		return -EINVAL;
 
 	iter->max_skip_dentries = 0;
@@ -310,7 +306,16 @@ int exfat_de_iter_advance(struct exfat_de_iter *iter, int skip_dentries)
 	return 0;
 }
 
-off_t exfat_de_iter_file_offset(struct exfat_de_iter *iter)
+off_t exfat_de_iter_device_offset(struct exfat_de_iter *iter)
 {
-	return iter->de_file_offset;
+	struct buffer_desc *bd;
+	unsigned int block;
+
+	if ((uint64_t)iter->de_file_offset >= iter->parent->size)
+		return EOF;
+
+	block = iter->de_file_offset / iter->read_size;
+	bd = &iter->buffer_desc[block & 0x01];
+	return exfat_c2o(iter->exfat, bd->p_clus) + bd->offset +
+		iter->de_file_offset % iter->read_size;
 }
