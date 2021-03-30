@@ -85,7 +85,6 @@ static void usage(char *name)
 			##__VA_ARGS__);			\
 })
 
-
 #define repair_file_ask(iter, inode, code, fmt, ...)	\
 ({							\
 		resolve_path_parent(&path_resolve_ctx,	\
@@ -689,19 +688,21 @@ static bool read_volume_label(struct exfat_de_iter *iter)
 	return true;
 }
 
-static bool read_bitmap(struct exfat_de_iter *iter)
+static int read_bitmap(struct exfat *exfat)
 {
+	struct exfat_lookup_filter filter = {
+		.in.type	= EXFAT_BITMAP,
+		.in.filter	= NULL,
+		.in.param	= NULL,
+	};
 	struct exfat_dentry *dentry;
-	struct exfat *exfat;
+	int retval;
 
-	exfat = iter->exfat;
+	retval = exfat_lookup_dentry_set(exfat, exfat->root, &filter);
+	if (retval)
+		return retval;
 
-	if (heap_clus(exfat, exfat->disk_bitmap_clus))
-		return true;
-
-	if (exfat_de_iter_get(iter, 0, &dentry))
-		return false;
-
+	dentry = filter.out.dentry_set;
 	exfat_debug("start cluster %#x, size %#" PRIx64 "\n",
 			le32_to_cpu(dentry->bitmap_start_clu),
 			le64_to_cpu(dentry->bitmap_size));
@@ -710,28 +711,29 @@ static bool read_bitmap(struct exfat_de_iter *iter)
 			DIV_ROUND_UP(exfat->clus_count, 8)) {
 		exfat_err("invalid size of allocation bitmap. 0x%" PRIx64 "\n",
 				le64_to_cpu(dentry->bitmap_size));
-		return false;
+		return -EINVAL;
 	}
 	if (!heap_clus(exfat, le32_to_cpu(dentry->bitmap_start_clu))) {
 		exfat_err("invalid start cluster of allocate bitmap. 0x%x\n",
 				le32_to_cpu(dentry->bitmap_start_clu));
-		return false;
+		return -EINVAL;
 	}
 
 	exfat->disk_bitmap_clus = le32_to_cpu(dentry->bitmap_start_clu);
 	exfat->disk_bitmap_size = DIV_ROUND_UP(exfat->clus_count, 8);
 
-	exfat_bitmap_set_range(exfat, le64_to_cpu(dentry->bitmap_start_clu),
-			DIV_ROUND_UP(exfat->disk_bitmap_size,
-			exfat->clus_size));
+	exfat_bitmap_set_range(exfat, exfat->alloc_bitmap,
+			       le32_to_cpu(dentry->bitmap_start_clu),
+			       DIV_ROUND_UP(exfat->disk_bitmap_size,
+					    exfat->clus_size));
+	free(filter.out.dentry_set);
 
 	if (exfat_read(exfat->blk_dev->dev_fd, exfat->disk_bitmap,
 			exfat->disk_bitmap_size,
 			exfat_c2o(exfat, exfat->disk_bitmap_clus)) !=
 			(ssize_t)exfat->disk_bitmap_size)
-		return false;
-
-	return true;
+		return -EIO;
+	return 0;
 }
 
 static bool read_upcase_table(struct exfat_de_iter *iter)
@@ -784,9 +786,10 @@ static bool read_upcase_table(struct exfat_de_iter *iter)
 		return false;
 	}
 
-	exfat_bitmap_set_range(exfat, le32_to_cpu(dentry->upcase_start_clu),
-			DIV_ROUND_UP(le64_to_cpu(dentry->upcase_size),
-			exfat->clus_size));
+	exfat_bitmap_set_range(exfat, exfat->alloc_bitmap,
+			       le32_to_cpu(dentry->upcase_start_clu),
+			       DIV_ROUND_UP(le64_to_cpu(dentry->upcase_size),
+					    exfat->clus_size));
 
 	free(upcase);
 	return true;
@@ -845,14 +848,6 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 				goto err;
 			}
 			break;
-		case EXFAT_BITMAP:
-			if (!read_bitmap(de_iter)) {
-				exfat_err(
-					"failed to verify allocation bitmap\n");
-				ret = -EINVAL;
-				goto err;
-			}
-			break;
 		case EXFAT_UPCASE:
 			if (!read_upcase_table(de_iter)) {
 				exfat_err(
@@ -864,7 +859,8 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 		case EXFAT_LAST:
 			goto out;
 		default:
-			if (IS_EXFAT_DELETED(dentry->type))
+			if (IS_EXFAT_DELETED(dentry->type) ||
+			    dentry->type == EXFAT_BITMAP)
 				break;
 			exfat_err("unknown entry type. 0x%x\n", dentry->type);
 			ret = -EINVAL;
@@ -1081,6 +1077,11 @@ static int exfat_root_dir_check(struct exfat *exfat)
 	exfat_stat.dir_count++;
 	exfat_debug("root directory: start cluster[0x%x] size[0x%" PRIx64 "]\n",
 		root->first_clus, root->size);
+
+	if (read_bitmap(exfat)) {
+		exfat_err("failed to read bitmap\n");
+		return -EINVAL;
+	}
 	return 0;
 }
 
