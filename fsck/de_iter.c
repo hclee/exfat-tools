@@ -214,9 +214,7 @@ int exfat_de_iter_init(struct exfat_de_iter *iter, struct exfat *exfat,
 	else
 		iter->ra_partial_size = exfat->clus_size / 4;
 	iter->ra_partial_size = MIN(iter->ra_partial_size, 8 * KB);
-
-	if (!iter->buffer_desc)
-		iter->buffer_desc = bd;
+	iter->buffer_desc = bd;
 
 	if (iter->parent->size == 0)
 		return EOF;
