@@ -11,6 +11,23 @@
 #include "inode.h"
 #include "exfat_fs.h"
 
+int exfat_o2c(struct exfat *exfat, off_t device_offset,
+	      unsigned int *clu, unsigned int *offset)
+{
+	off_t heap_offset;
+
+	heap_offset = exfat_s2o(exfat, le32_to_cpu(exfat->bs->bsx.clu_offset));
+	if (device_offset < heap_offset)
+		return -ERANGE;
+
+	*clu = (unsigned int)((device_offset - heap_offset) /
+			      exfat->clus_size) + EXFAT_FIRST_CLUSTER;
+	if (!heap_clus(exfat, *clu))
+		return -ERANGE;
+	*offset = (device_offset - heap_offset) % exfat->clus_size;
+	return 0;
+}
+
 void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 			clus_t start_clus, clus_t count)
 {
