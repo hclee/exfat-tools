@@ -68,6 +68,9 @@ static inline off_t exfat_c2o(struct exfat *exfat, unsigned int clus)
 				 exfat->bs->bsx.sect_per_clus_bits));
 }
 
+int exfat_o2c(struct exfat *exfat, off_t device_offset,
+	      unsigned int *clu, unsigned int *offset);
+
 static inline bool heap_clus(struct exfat *exfat, clus_t clus)
 {
 	return clus >= EXFAT_FIRST_CLUSTER &&
@@ -83,5 +86,9 @@ int exfat_lookup_dentry_set(struct exfat *exfat, struct exfat_inode *parent,
 		struct exfat_lookup_filter *filter);
 int exfat_lookup_file(struct exfat *exfat, struct exfat_inode *parent,
 		const char *name, struct exfat_lookup_filter *filter_out);
+
+/* create.c */
+int exfat_create_file(struct exfat *exfat, struct exfat_inode *parent,
+		      const char *name, unsigned short attr);
 
 #endif

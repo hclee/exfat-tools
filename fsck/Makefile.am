@@ -5,4 +5,4 @@ sbin_PROGRAMS = fsck.exfat
 
 fsck_exfat_SOURCES = fsck.h fsck.c repair.h repair.c de_iter.h de_iter.c \
 		     inode.h inode.c exfat_fs.h exfat_fs.c \
-		     lookup.c
+		     lookup.c create.c
