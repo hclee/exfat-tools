@@ -80,6 +80,8 @@ int set_fat(struct exfat *exfat, clus_t clus, clus_t next_clus);
 
 /* lookup.c */
 int exfat_lookup_dentry_set(struct exfat *exfat, struct exfat_inode *parent,
-			  struct exfat_lookup_filter *filter);
+		struct exfat_lookup_filter *filter);
+int exfat_lookup_file(struct exfat *exfat, struct exfat_inode *parent,
+		const char *name, struct exfat_lookup_filter *filter_out);
 
 #endif
