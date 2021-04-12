@@ -139,8 +139,7 @@ static int check_clus_chain(struct exfat_de_iter *de_iter,
 		 * This cluster is already allocated. it may be shared with
 		 * the other file, or there is a loop in cluster chain.
 		 */
-		if (EXFAT_BITMAP_GET(exfat->alloc_bitmap,
-				clus - EXFAT_FIRST_CLUSTER)) {
+		if (exfat_bitmap_get(exfat->alloc_bitmap, clus)) {
 			if (repair_file_ask(de_iter, node,
 					ER_FILE_DUPLICATED_CLUS,
 					"cluster is already allocated for "
@@ -152,8 +151,7 @@ static int check_clus_chain(struct exfat_de_iter *de_iter,
 				return -EINVAL;
 		}
 
-		if (!EXFAT_BITMAP_GET(exfat->disk_bitmap,
-				clus - EXFAT_FIRST_CLUSTER)) {
+		if (!exfat_bitmap_get(exfat->disk_bitmap, clus)) {
 			if (repair_file_ask(de_iter, node,
 					ER_FILE_INVALID_CLUS,
 					"cluster is marked as free. truncate to %" PRIu64 " bytes",
@@ -184,8 +182,7 @@ static int check_clus_chain(struct exfat_de_iter *de_iter,
 		}
 
 		count++;
-		EXFAT_BITMAP_SET(exfat->alloc_bitmap,
-				clus - EXFAT_FIRST_CLUSTER);
+		exfat_bitmap_set(exfat->alloc_bitmap, clus);
 		prev = clus;
 		clus = next;
 	}
@@ -238,15 +235,13 @@ static bool root_get_clus_count(struct exfat *exfat, struct exfat_inode *node,
 			return false;
 		}
 
-		if (EXFAT_BITMAP_GET(exfat->alloc_bitmap,
-				clus - EXFAT_FIRST_CLUSTER)) {
+		if (exfat_bitmap_get(exfat->alloc_bitmap, clus)) {
 			exfat_err("/: cluster is already allocated, or "
 				"there is a loop in cluster chain\n");
 			return false;
 		}
 
-		EXFAT_BITMAP_SET(exfat->alloc_bitmap,
-				clus - EXFAT_FIRST_CLUSTER);
+		exfat_bitmap_set(exfat->alloc_bitmap, clus);
 
 		if (get_next_clus(exfat, node, clus, &clus) != 0) {
 			exfat_err("/: broken cluster chain\n");
@@ -954,8 +949,7 @@ static int write_dirty_fat(struct exfat_fsck *fsck)
 
 		for (i = clus ? clus : EXFAT_FIRST_CLUSTER;
 				i < clus + clus_count; i++) {
-			if (!EXFAT_BITMAP_GET(exfat->alloc_bitmap,
-					i - EXFAT_FIRST_CLUSTER) &&
+			if (!exfat_bitmap_get(exfat->alloc_bitmap, i) &&
 					((clus_t *)bd[idx].buffer)[i - clus] !=
 					EXFAT_FREE_CLUSTER) {
 				((clus_t *)bd[idx].buffer)[i - clus] =
