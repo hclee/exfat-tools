@@ -27,7 +27,5 @@ struct exfat_fsck {
 };
 
 off_t exfat_c2o(struct exfat *exfat, unsigned int clus);
-int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
-				clus_t clus, clus_t *next);
 
 #endif
