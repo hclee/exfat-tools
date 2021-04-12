@@ -84,7 +84,8 @@ static inline bool heap_clus(struct exfat *exfat, clus_t clus)
 		(clus - EXFAT_FIRST_CLUSTER) < exfat->clus_count;
 }
 
-int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
+int get_next_clus(struct exfat *exfat, clus_t clus, clus_t *next);
+int get_inode_next_clus(struct exfat *exfat, struct exfat_inode *node,
 				clus_t clus, clus_t *next);
 int set_fat(struct exfat *exfat, clus_t clus, clus_t next_clus);
 
