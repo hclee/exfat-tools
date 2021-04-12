@@ -318,8 +318,8 @@ static int exfat_create_bitmap(struct exfat_blk_dev *bd)
 	if (!bitmap)
 		return -1;
 
-	for (i = 0; i < finfo.used_clu_cnt - EXFAT_FIRST_CLUSTER; i++)
-		EXFAT_BITMAP_SET(bitmap, i);
+	for (i = EXFAT_FIRST_CLUSTER; i < finfo.used_clu_cnt; i++)
+		exfat_bitmap_set(bitmap, i);
 
 	nbytes = pwrite(bd->dev_fd, bitmap, finfo.bitmap_byte_len, finfo.bitmap_byte_off);
 	if (nbytes != finfo.bitmap_byte_len) {
