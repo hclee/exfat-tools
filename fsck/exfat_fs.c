@@ -44,8 +44,7 @@ void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 	}
 }
 
-int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
-				clus_t clus, clus_t *next)
+int get_next_clus(struct exfat *exfat, clus_t clus, clus_t *next)
 {
 	off_t offset;
 
@@ -53,11 +52,6 @@ int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
 
 	if (!heap_clus(exfat, clus))
 		return -EINVAL;
-
-	if (node->is_contiguous) {
-		*next = clus + 1;
-		return 0;
-	}
 
 	offset = (off_t)le32_to_cpu(exfat->bs->bsx.fat_offset) <<
 				exfat->bs->bsx.sect_size_bits;
@@ -68,6 +62,22 @@ int get_next_clus(struct exfat *exfat, struct exfat_inode *node,
 		return -EIO;
 	*next = le32_to_cpu(*next);
 	return 0;
+
+}
+
+int get_inode_next_clus(struct exfat *exfat, struct exfat_inode *node,
+				clus_t clus, clus_t *next)
+{
+	*next = EXFAT_EOF_CLUSTER;
+
+	if (node->is_contiguous) {
+		if (!heap_clus(exfat, clus))
+			return -EINVAL;
+		*next = clus + 1;
+		return 0;
+	}
+
+	return get_next_clus(exfat, clus, next);
 }
 
 int set_fat(struct exfat *exfat, clus_t clus, clus_t next_clus)
