@@ -39,8 +39,7 @@ void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 
 	clus = start_clus;
 	while (clus < start_clus + count) {
-		EXFAT_BITMAP_SET(bitmap,
-				clus - EXFAT_FIRST_CLUSTER);
+		exfat_bitmap_set(bitmap, clus);
 		clus++;
 	}
 }
