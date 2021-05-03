@@ -209,12 +209,18 @@ int exfat_de_iter_init(struct exfat_de_iter *iter, struct exfat *exfat,
 	iter->parent = dir;
 	iter->write_size = exfat->sect_size;
 	iter->read_size = exfat->clus_size <= 4*KB ? exfat->clus_size : 4*KB;
+
 	if (exfat->clus_size <= 32 * KB)
 		iter->ra_partial_size = MAX(4 * KB, exfat->clus_size / 2);
 	else
 		iter->ra_partial_size = exfat->clus_size / 4;
 	iter->ra_partial_size = MIN(iter->ra_partial_size, 8 * KB);
+
 	iter->buffer_desc = bd;
+
+	iter->de_file_offset = 0;
+	iter->next_read_offset = iter->read_size;
+	iter->max_skip_dentries = 0;
 
 	if (iter->parent->size == 0)
 		return EOF;
@@ -224,10 +230,6 @@ int exfat_de_iter_init(struct exfat_de_iter *iter, struct exfat *exfat,
 		exfat_err("failed to read directory entries.\n");
 		return -EIO;
 	}
-
-	iter->de_file_offset = 0;
-	iter->next_read_offset = iter->read_size;
-	iter->max_skip_dentries = 0;
 	return 0;
 }
 
@@ -316,4 +318,9 @@ off_t exfat_de_iter_device_offset(struct exfat_de_iter *iter)
 	bd = &iter->buffer_desc[block & 0x01];
 	return exfat_c2o(iter->exfat, bd->p_clus) + bd->offset +
 		iter->de_file_offset % iter->read_size;
+}
+
+off_t exfat_de_iter_file_offset(struct exfat_de_iter *iter)
+{
+	return iter->de_file_offset;
 }
