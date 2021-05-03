@@ -67,6 +67,8 @@ void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 
 int exfat_find_zero_bit(struct exfat *exfat, char *bmap,
 			 clus_t start_clu, clus_t *next);
+int exfat_find_one_bit(struct exfat *exfat, char *bmap,
+		       clus_t start_clu, clus_t *next);
 
 #define EXFAT_CLUSTER_SIZE(pbr) (1 << ((pbr)->bsx.sect_size_bits +	\
 					(pbr)->bsx.sect_per_clus_bits))
