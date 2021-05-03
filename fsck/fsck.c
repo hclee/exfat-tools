@@ -1324,7 +1324,8 @@ static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name,
 			exfat_stat.dir_count, exfat_stat.file_count);
 	if (errors || fsck->dirty)
 		printf("%s: files corrupted %ld, files fixed %ld\n", dev_name,
-			exfat_stat.error_count, exfat_stat.fixed_count);
+			exfat_stat.error_count - exfat_stat.fixed_count,
+			exfat_stat.fixed_count);
 }
 
 int main(int argc, char * const argv[])
