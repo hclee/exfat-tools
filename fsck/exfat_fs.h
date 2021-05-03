@@ -6,6 +6,8 @@
 #define _EXFAT_FS_H
 
 struct exfat;
+struct exfat_inode;
+struct exfat_dentry_loc;
 struct exfat_de_iter;
 
 struct exfat_lookup_filter {
@@ -54,8 +56,17 @@ static inline void exfat_bitmap_set(char *bmap, clus_t c)
 	(((bitmap_t *)(bmap))[BIT_ENTRY(cc)] |= BIT_MASK(cc));
 }
 
+static inline void exfat_bitmap_clear(char *bmap, clus_t c)
+{
+	clus_t cc = c - EXFAT_FIRST_CLUSTER;
+	(((bitmap_t *)(bmap))[BIT_ENTRY(cc)] &= ~BIT_MASK(cc));
+}
+
 void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 			    clus_t start_clus, clus_t count);
+
+int exfat_find_zero_bit(struct exfat *exfat, char *bmap,
+			 clus_t start_clu, clus_t *next);
 
 #define EXFAT_CLUSTER_SIZE(pbr) (1 << ((pbr)->bsx.sect_size_bits +	\
 					(pbr)->bsx.sect_per_clus_bits))
@@ -97,7 +108,23 @@ int exfat_lookup_file(struct exfat *exfat, struct exfat_inode *parent,
 		const char *name, struct exfat_lookup_filter *filter_out);
 
 /* create.c */
+void exfat_calc_dentry_checksum(struct exfat_dentry *dentry,
+				uint16_t *checksum, bool primary);
 int exfat_create_file(struct exfat *exfat, struct exfat_inode *parent,
-		      const char *name, unsigned short attr);
+		      const char *name, unsigned short attr,
+		      struct exfat_dentry **out_dset, int *out_dcount,
+		      off_t *dent_dev_offset);
+int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
+			clus_t *new_clu, bool zero_fill);
+int exfat_update_file_dentry_set(struct exfat *exfat,
+				  struct exfat_dentry *dset, int dcount,
+				  const char *name,
+				  clus_t start_clu, clus_t ccount);
+int exfat_build_file_dentry_set(struct exfat *exfat, const char *name,
+			unsigned short attr, struct exfat_dentry **dentry_set,
+			int *dentry_count);
+int exfat_add_dentry_set(struct exfat *exfat, struct exfat_dentry_loc *loc,
+			 struct exfat_dentry *dset, int dcount,
+			 bool need_next_loc);
 
 #endif
