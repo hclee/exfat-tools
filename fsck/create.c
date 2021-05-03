@@ -137,7 +137,7 @@ int exfat_create_file(struct exfat *exfat, struct exfat_inode *parent,
 	if (retval < 0)
 		return retval;
 
-	retval = exfat_o2c(exfat, filter.out.dentry_d_offset, &clu, &offset);
+	retval = exfat_o2c(exfat, filter.out.dev_offset, &clu, &offset);
 	if (retval)
 		goto out;
 
@@ -148,7 +148,7 @@ int exfat_create_file(struct exfat *exfat, struct exfat_inode *parent,
 	}
 
 	if (exfat_write(exfat->blk_dev->dev_fd, dentry_set,
-			set_len, filter.out.dentry_d_offset) !=
+			set_len, filter.out.dev_offset) !=
 			(ssize_t)set_len) {
 		retval = -EIO;
 		goto out;

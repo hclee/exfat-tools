@@ -21,10 +21,11 @@ struct exfat_lookup_filter {
 	struct {
 		struct exfat_dentry	*dentry_set;
 		int			dentry_count;
+		off_t			file_offset;
 		/* device offset where the dentry_set locates, or
 		 * the empty slot locates or EOF if not found.
 		 */
-		off_t			dentry_d_offset;
+		off_t			dev_offset;
 	} out;
 };
 
