@@ -35,11 +35,11 @@ static struct path_resolve_ctx path_resolve_ctx;
  * if found, return 0. if not found, return EOF. otherwise return errno.
  */
 int exfat_lookup_dentry_set(struct exfat *exfat, struct exfat_inode *parent,
-			  struct exfat_lookup_filter *filter)
+			    struct exfat_lookup_filter *filter)
 {
 	struct buffer_desc *bd = NULL;
 	struct exfat_dentry *dentry;
-	off_t free_offset = 0;
+	off_t free_file_offset = 0, free_dev_offset = 0;
 	struct exfat_de_iter de_iter;
 	int dentry_count;
 	int retval;
@@ -95,7 +95,9 @@ int exfat_lookup_dentry_set(struct exfat *exfat, struct exfat_inode *parent,
 		} else if ((dentry->type == EXFAT_LAST ||
 			    IS_EXFAT_DELETED(dentry->type))) {
 			if (!last_is_free) {
-				free_offset = exfat_de_iter_device_offset(
+				free_file_offset = exfat_de_iter_file_offset(
+						&de_iter);
+				free_dev_offset = exfat_de_iter_device_offset(
 						&de_iter);
 				last_is_free = true;
 			}
@@ -106,13 +108,18 @@ int exfat_lookup_dentry_set(struct exfat *exfat, struct exfat_inode *parent,
 	}
 
 out:
-	if (retval == 0)
-		filter->out.dentry_d_offset =
+	if (retval == 0) {
+		filter->out.file_offset =
+			exfat_de_iter_file_offset(&de_iter);
+		filter->out.dev_offset =
 			exfat_de_iter_device_offset(&de_iter);
-	else if (retval == EOF && last_is_free)
-		filter->out.dentry_d_offset = free_offset;
-	else
-		filter->out.dentry_d_offset = EOF;
+	} else if (retval == EOF && last_is_free) {
+		filter->out.file_offset = free_file_offset;
+		filter->out.dev_offset = free_dev_offset;
+	} else {
+		filter->out.file_offset = exfat_de_iter_file_offset(&de_iter);
+		filter->out.dev_offset = EOF;
+	}
 	if (bd)
 		exfat_free_buffer(bd, 2);
 	return retval;
