@@ -113,6 +113,10 @@ void exfat_free_exfat(struct exfat *exfat)
 			free(exfat->alloc_bitmap);
 		if (exfat->disk_bitmap)
 			free(exfat->disk_bitmap);
+		if (exfat->ohead_bitmap)
+			free(exfat->ohead_bitmap);
+		if (exfat->upcase_table)
+			free(exfat->upcase_table);
 		if (exfat->zero_cluster)
 			free(exfat->zero_cluster);
 		free(exfat);
@@ -138,6 +142,13 @@ struct exfat *exfat_alloc_exfat(struct exfat_blk_dev *blk_dev, struct pbr *bs)
 	exfat->alloc_bitmap = (char *)calloc(1,
 			EXFAT_BITMAP_SIZE(exfat->clus_count));
 	if (!exfat->alloc_bitmap) {
+		exfat_err("failed to allocate bitmap\n");
+		goto err;
+	}
+
+	exfat->ohead_bitmap = calloc(1,
+			     EXFAT_BITMAP_SIZE(exfat->clus_count));
+	if (!exfat->ohead_bitmap) {
 		exfat_err("failed to allocate bitmap\n");
 		goto err;
 	}
