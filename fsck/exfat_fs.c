@@ -44,6 +44,23 @@ void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 	}
 }
 
+int exfat_find_zero_bit(struct exfat *exfat, char *bmap,
+			clus_t start_clu, clus_t *next)
+{
+	clus_t last_clu;
+
+	last_clu = le32_to_cpu(exfat->bs->bsx.clu_count) +
+		EXFAT_FIRST_CLUSTER;
+	while (start_clu < last_clu) {
+		if (!exfat_bitmap_get(bmap, start_clu)) {
+			*next = start_clu;
+			return 0;
+		}
+		start_clu++;
+	}
+	return 1;
+}
+
 int get_next_clus(struct exfat *exfat, clus_t clus, clus_t *next)
 {
 	off_t offset;
