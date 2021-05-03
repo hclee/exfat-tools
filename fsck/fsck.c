@@ -597,7 +597,7 @@ static int check_inode(struct exfat_de_iter *iter, struct exfat_inode *node)
 	return valid ? ret : -EINVAL;
 }
 
-static int read_file_dentries(struct exfat_de_iter *iter,
+static int read_file_dentry_set(struct exfat_de_iter *iter,
 			struct exfat_inode **new_node, int *skip_dentries)
 {
 	struct exfat_dentry *file_de, *stream_de, *name_de;
@@ -613,7 +613,8 @@ static int read_file_dentries(struct exfat_de_iter *iter,
 	}
 	ret = exfat_de_iter_get(iter, 1, &stream_de);
 	if (ret || stream_de->type != EXFAT_STREAM) {
-		exfat_err("failed to get stream dentry. %d\n", ret);
+		exfat_err("failed to get stream dentry after file dentry at %#jx\n",
+			  exfat_de_iter_device_offset(iter));
 		return -EINVAL;
 	}
 
@@ -632,7 +633,8 @@ static int read_file_dentries(struct exfat_de_iter *iter,
 	for (i = 2; i <= file_de->file_num_ext; i++) {
 		ret = exfat_de_iter_get(iter, i, &name_de);
 		if (ret || name_de->type != EXFAT_NAME) {
-			exfat_err("failed to get name dentry. %d\n", ret);
+			exfat_err("failed to get name dentry after stream dentry at %#jx\n",
+				  exfat_de_iter_device_offset(iter));
 			ret = -EINVAL;
 			goto err;
 		}
@@ -665,7 +667,7 @@ static int read_file_dentries(struct exfat_de_iter *iter,
 	*new_node = node;
 	return 0;
 err:
-	*skip_dentries = 0;
+	*skip_dentries = 1;
 	*new_node = NULL;
 	free_exfat_inode(node);
 	return ret;
@@ -679,7 +681,7 @@ static int read_file(struct exfat_de_iter *de_iter,
 
 	*new_node = NULL;
 
-	ret = read_file_dentries(de_iter, &node, dentry_count);
+	ret = read_file_dentry_set(de_iter, &node, dentry_count);
 	if (ret)
 		return ret;
 
