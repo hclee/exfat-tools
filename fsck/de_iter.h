@@ -32,5 +32,6 @@ int exfat_de_iter_get_dirty(struct exfat_de_iter *iter,
 int exfat_de_iter_flush(struct exfat_de_iter *iter);
 int exfat_de_iter_advance(struct exfat_de_iter *iter, int skip_dentries);
 off_t exfat_de_iter_device_offset(struct exfat_de_iter *iter);
+off_t exfat_de_iter_file_offset(struct exfat_de_iter *iter);
 
 #endif
