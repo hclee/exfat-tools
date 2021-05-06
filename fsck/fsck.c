@@ -1308,10 +1308,10 @@ static char *bytes_to_human_readable(size_t bytes)
 	return buf;
 }
 
-static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name,
-			int errors)
+static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name)
 {
 	struct exfat *exfat = fsck->exfat;
+	bool clean;
 
 	exfat_info("sector size:  %s\n",
 		bytes_to_human_readable(1 << exfat->bs->bsx.sect_size_bits));
@@ -1320,10 +1320,12 @@ static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name,
 	exfat_info("volume size:  %s\n",
 		bytes_to_human_readable(exfat->blk_dev->size));
 
+	clean = exfat_stat.error_count == 0 ||
+		exfat_stat.error_count == exfat_stat.fixed_count;
 	printf("%s: %s. directories %ld, files %ld\n", dev_name,
-			errors ? "checking stopped" : "clean",
+			clean ? "clean" : "corrupted",
 			exfat_stat.dir_count, exfat_stat.file_count);
-	if (errors || fsck->dirty)
+	if (exfat_stat.error_count)
 		printf("%s: files corrupted %ld, files fixed %ld\n", dev_name,
 			exfat_stat.error_count - exfat_stat.fixed_count,
 			exfat_stat.fixed_count);
@@ -1506,7 +1508,7 @@ int main(int argc, char * const argv[])
 		exfat_mark_volume_dirty(exfat_fsck.exfat, false);
 
 out:
-	exfat_show_info(&exfat_fsck, ui.ei.dev_name, ret);
+	exfat_show_info(&exfat_fsck, ui.ei.dev_name);
 err:
 	if (ret == -EINVAL)
 		exit_code = FSCK_EXIT_ERRORS_LEFT;
