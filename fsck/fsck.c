@@ -229,8 +229,10 @@ truncate_file:
 	/* remaining clusters will be freed while FAT is compared with
 	 * alloc_bitmap.
 	 */
-	if (!node->is_contiguous && heap_clus(exfat, prev))
-		return set_fat(exfat, prev, EXFAT_EOF_CLUSTER);
+	if (!node->is_contiguous && heap_clus(exfat, prev)) {
+		if (set_fat(exfat, prev, EXFAT_EOF_CLUSTER))
+			return -EIO;
+	}
 	return 1;
 }
 
