@@ -1560,10 +1560,11 @@ int main(int argc, char * const argv[])
 out:
 	exfat_show_info(&exfat_fsck, ui.ei.dev_name);
 err:
-	if (ret == -EINVAL)
-		exit_code = FSCK_EXIT_ERRORS_LEFT;
-	else if (ret)
+	if (ret && ret != -EINVAL)
 		exit_code = FSCK_EXIT_OPERATION_ERROR;
+	else if (ret == -EINVAL ||
+		 exfat_stat.error_count != exfat_stat.fixed_count)
+		exit_code = FSCK_EXIT_ERRORS_LEFT;
 	else if (exfat_fsck.dirty)
 		exit_code = FSCK_EXIT_CORRECTED;
 	else
