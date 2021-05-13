@@ -905,70 +905,6 @@ err:
 	return ret;
 }
 
-static int write_dirty_fat(struct exfat_fsck *fsck)
-{
-	struct exfat *exfat = fsck->exfat;
-	struct buffer_desc *bd;
-	off_t offset;
-	ssize_t len;
-	size_t read_size, write_size;
-	clus_t clus, last_clus, clus_count, i;
-	unsigned int idx;
-
-	clus = 0;
-	last_clus = le32_to_cpu(exfat->bs->bsx.clu_count) + 2;
-	bd = fsck->buffer_desc;
-	idx = 0;
-	offset = le32_to_cpu(exfat->bs->bsx.fat_offset) *
-		exfat->sect_size;
-	read_size = exfat->clus_size;
-	write_size = exfat->sect_size;
-
-	while (clus < last_clus) {
-		clus_count = MIN(read_size / sizeof(clus_t), last_clus - clus);
-		len = exfat_read(exfat->blk_dev->dev_fd, bd[idx].buffer,
-				clus_count * sizeof(clus_t), offset);
-		if (len != (ssize_t)(sizeof(clus_t) * clus_count)) {
-			exfat_err("failed to read fat entries, %zd\n", len);
-			return -EIO;
-		}
-
-		/* TODO: read ahead */
-
-		for (i = clus ? clus : EXFAT_FIRST_CLUSTER;
-				i < clus + clus_count; i++) {
-			if (!exfat_bitmap_get(exfat->alloc_bitmap, i) &&
-					((clus_t *)bd[idx].buffer)[i - clus] !=
-					EXFAT_FREE_CLUSTER) {
-				((clus_t *)bd[idx].buffer)[i - clus] =
-					EXFAT_FREE_CLUSTER;
-				bd[idx].dirty[(i - clus) /
-					(write_size / sizeof(clus_t))] = true;
-			}
-		}
-
-		for (i = 0; i < read_size; i += write_size) {
-			if (bd[idx].dirty[i / write_size]) {
-				if (exfat_write(exfat->blk_dev->dev_fd,
-						&bd[idx].buffer[i], write_size,
-						offset + i) !=
-						(ssize_t)write_size) {
-					exfat_err("failed to write "
-						"fat entries\n");
-					return -EIO;
-
-				}
-				bd[idx].dirty[i / write_size] = false;
-			}
-		}
-
-		idx ^= 0x01;
-		clus = clus + clus_count;
-		offset += len;
-	}
-	return 0;
-}
-
 static int write_dirty_bitmap(struct exfat_fsck *fsck)
 {
 	struct exfat *exfat = fsck->exfat;
@@ -1016,10 +952,6 @@ static int write_dirty_bitmap(struct exfat_fsck *fsck)
 
 static int free_unused_clusters(struct exfat_fsck *fsck)
 {
-	if (write_dirty_fat(fsck)) {
-		exfat_err("failed to write fat entries\n");
-		return -EIO;
-	}
 	if (write_dirty_bitmap(fsck)) {
 		exfat_err("failed to write bitmap\n");
 		return -EIO;
