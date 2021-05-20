@@ -1,8 +1,9 @@
 #!/bin/bash
 
 TESTCASE_DIR=$1
+NEED_LOOPDEV=$2
 IMAGE_FILE=exfat.img
-FSCK_PROG=../build/sbin/fsck.exfat
+FSCK_PROG=fsck.exfat
 FSCK_OPTS=-y
 PASS_COUNT=0
 
@@ -32,15 +33,26 @@ do
 
 	# Set up image file as loop device
 	tar -C . -xf $TESTCASE_DIR/$IMAGE_FILE.tar.xz
-	losetup -f $IMAGE_FILE
-	DEV_FILE=`losetup -j $IMAGE_FILE | awk '{print $1}' | sed 's/://g'`
+	if [ $NEED_LOOPDEV ]; then
+		losetup -f $IMAGE_FILE
+		DEV_FILE=`losetup -j $IMAGE_FILE | awk '{print $1}' | sed 's/://g'`
+	else
+		DEV_FILE=$IMAGE_FILE
+	fi
 
 	# Run fsck for repair
-	$FSCK_PROG $FSCK_OPTS $DEV_FILE
+	FSCK_EXTRA_OPTS=""
+	if [ -e  "$TESTCASE_DIR/config" ]; then
+		FSCK_EXTRA_OPTS=`grep -e "#OPTS: " "$TESTCASE_DIR/config" | awk '{print $2}'`
+	fi
+
+	$FSCK_PROG $FSCK_OPTS $FSCK_EXTRA_OPTS $DEV_FILE
 	if [ "$?" -ne "1" ]; then
 		echo ""
 		echo "Failed to repair $TESTCASE_DIR"
-		losetup -d $DEV_FILE
+		if [ $NEED_LOOPDEV ]; then
+			losetup -d $DEV_FILE
+		fi
 		cleanup
 	fi
 
@@ -50,8 +62,14 @@ do
 	if [ "$?" -ne "0" ]; then
 		echo ""
 		echo "Failed, corrupted $TESTCASE_DIR"
-		losetup -d $DEV_FILE
+		if [ $NEED_LOOPDEV ]; then
+			losetup -d $DEV_FILE
+		fi
 		cleanup
+	fi
+
+	if [ $NEED_LOOPDEV ]; then
+		losetup -d $DEV_FILE
 	fi
 
 	if [  -e "$TESTCASE_DIR/exfat.img.expected.xz" ]; then
@@ -61,7 +79,6 @@ do
 		if [ "$?" -ne "0" ]; then
 			echo ""
 			echo "Failed $TESTCASE_DIR"
-			losetup -d $DEV_FILE
 			cleanup
 		fi
 	fi
@@ -69,7 +86,5 @@ do
 	echo ""
 	echo "Passed $TESTCASE_DIR"
 	PASS_COUNT=$((PASS_COUNT + 1))
-
-	losetup -d $DEV_FILE
 done
 cleanup

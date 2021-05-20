@@ -9,7 +9,10 @@
 
 #include "exfat_ondisk.h"
 #include "libexfat.h"
-#include "fsck.h"
+
+#include "inode.h"
+#include "exfat_fs.h"
+#include "de_iter.h"
 
 static ssize_t write_block(struct exfat_de_iter *iter, unsigned int block)
 {
@@ -80,7 +83,7 @@ static int read_ahead_next_blocks(struct exfat_de_iter *iter,
 		ra_clus = clus + 1;
 		if (ra_clus == iter->ra_next_clus &&
 				offset >= iter->ra_begin_offset) {
-			ret = get_next_clus(exfat, iter->parent,
+			ret = get_inode_next_clus(exfat, iter->parent,
 					p_clus, &ra_p_clus);
 			if (ra_p_clus == EXFAT_EOF_CLUSTER)
 				return -EIO;
@@ -169,7 +172,7 @@ static ssize_t read_block(struct exfat_de_iter *iter, unsigned int block)
 			desc->p_clus = prev_desc->p_clus;
 			desc->offset = prev_desc->offset + iter->read_size;
 		} else {
-			ret = get_next_clus(exfat, iter->parent,
+			ret = get_inode_next_clus(exfat, iter->parent,
 					prev_desc->p_clus, &desc->p_clus);
 			desc->offset = 0;
 			if (!ret && desc->p_clus == EXFAT_EOF_CLUSTER)
@@ -200,20 +203,24 @@ static ssize_t read_block(struct exfat_de_iter *iter, unsigned int block)
 }
 
 int exfat_de_iter_init(struct exfat_de_iter *iter, struct exfat *exfat,
-				struct exfat_inode *dir)
+			struct exfat_inode *dir, struct buffer_desc *bd)
 {
 	iter->exfat = exfat;
 	iter->parent = dir;
 	iter->write_size = exfat->sect_size;
 	iter->read_size = exfat->clus_size <= 4*KB ? exfat->clus_size : 4*KB;
+
 	if (exfat->clus_size <= 32 * KB)
 		iter->ra_partial_size = MAX(4 * KB, exfat->clus_size / 2);
 	else
 		iter->ra_partial_size = exfat->clus_size / 4;
 	iter->ra_partial_size = MIN(iter->ra_partial_size, 8 * KB);
 
-	if (!iter->buffer_desc)
-		iter->buffer_desc = exfat->buffer_desc;
+	iter->buffer_desc = bd;
+
+	iter->de_file_offset = 0;
+	iter->next_read_offset = iter->read_size;
+	iter->max_skip_dentries = 0;
 
 	if (iter->parent->size == 0)
 		return EOF;
@@ -223,10 +230,6 @@ int exfat_de_iter_init(struct exfat_de_iter *iter, struct exfat *exfat,
 		exfat_err("failed to read directory entries.\n");
 		return -EIO;
 	}
-
-	iter->de_file_offset = 0;
-	iter->next_read_offset = iter->read_size;
-	iter->max_skip_dentries = 0;
 	return 0;
 }
 
@@ -292,19 +295,29 @@ int exfat_de_iter_flush(struct exfat_de_iter *iter)
 	return 0;
 }
 
-/*
- * @skip_dentries must be the largest @ith + 1 of exfat_de_iter_get
- * since the last call of exfat_de_iter_advance
- */
 int exfat_de_iter_advance(struct exfat_de_iter *iter, int skip_dentries)
 {
-	if (skip_dentries != iter->max_skip_dentries)
+	if (skip_dentries > iter->max_skip_dentries)
 		return -EINVAL;
 
 	iter->max_skip_dentries = 0;
 	iter->de_file_offset = iter->de_file_offset +
 				skip_dentries * sizeof(struct exfat_dentry);
 	return 0;
+}
+
+off_t exfat_de_iter_device_offset(struct exfat_de_iter *iter)
+{
+	struct buffer_desc *bd;
+	unsigned int block;
+
+	if ((uint64_t)iter->de_file_offset >= iter->parent->size)
+		return EOF;
+
+	block = iter->de_file_offset / iter->read_size;
+	bd = &iter->buffer_desc[block & 0x01];
+	return exfat_c2o(iter->exfat, bd->p_clus) + bd->offset +
+		iter->de_file_offset % iter->read_size;
 }
 
 off_t exfat_de_iter_file_offset(struct exfat_de_iter *iter)
