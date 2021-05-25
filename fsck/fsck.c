@@ -1055,7 +1055,6 @@ static int exfat_filesystem_check(struct exfat_fsck *fsck)
 	}
 out:
 	exfat_free_dir_list(exfat);
-	exfat->root = NULL;
 	return ret;
 }
 
