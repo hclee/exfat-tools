@@ -67,28 +67,22 @@ void inode_free_file_children(struct exfat_inode *dir)
 }
 
 /* delete @child and all ancestors that does not have
- * children
+ * children except root directory.
  */
 void inode_free_ancestors(struct exfat_inode *child)
 {
 	struct exfat_inode *parent;
 
-	if (!list_empty(&child->children))
-		return;
-
-	do {
-		if (!(child->attr & ATTR_SUBDIR)) {
-			exfat_err("not directory.\n");
+	while (child && list_empty(&child->children)) {
+		if (child->parent == NULL || !(child->attr & ATTR_SUBDIR))
 			return;
-		}
 
 		parent = child->parent;
 		list_del(&child->sibling);
 		free_exfat_inode(child);
 
 		child = parent;
-	} while (child && list_empty(&child->children));
-
+	}
 	return;
 }
 
@@ -117,6 +111,8 @@ void exfat_free_exfat(struct exfat *exfat)
 			free(exfat->ohead_bitmap);
 		if (exfat->upcase_table)
 			free(exfat->upcase_table);
+		if (exfat->root)
+			free_exfat_inode(exfat->root);
 		if (exfat->zero_cluster)
 			free(exfat->zero_cluster);
 		free(exfat);
