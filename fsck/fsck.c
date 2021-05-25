@@ -1144,32 +1144,68 @@ static int rescue_clus_chain(struct exfat *exfat,
 	return 0;
 }
 
+static int read_lostfound(struct exfat *exfat, struct exfat_inode **lostfound)
+{
+	struct exfat_lookup_filter filter;
+	struct exfat_inode *inode;
+	int err;
+
+	err = exfat_lookup_file(exfat, exfat->root, "LOST+FOUND", &filter);
+	if (err)
+		return err;
+
+	inode = alloc_exfat_inode(ATTR_SUBDIR);
+	if (inode == NULL) {
+		free(filter.out.dentry_set);
+		return -ENOMEM;
+	}
+
+	inode->dentry_set = filter.out.dentry_set;
+	inode->dentry_count = filter.out.dentry_count;
+	inode->dev_offset = filter.out.dev_offset;
+
+	inode->first_clus = le32_to_cpu(
+			filter.out.dentry_set[1].dentry.stream.start_clu);
+	inode->size = le64_to_cpu(
+			filter.out.dentry_set[1].dentry.stream.size);
+
+	*lostfound = inode;
+	return 0;
+}
+
 /* Create temporary files under LOST+FOUND and assign orphan
  * chains of clusters to these files.
  */
 static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 {
 	struct exfat *exfat = fsck->exfat;
+	struct exfat_inode *lostfound;
 	bitmap_t *disk_b, *alloc_b, *ohead_b;
 	struct exfat_dentry *dset;
 	clus_t clu_count, clu, next, ccount;
 	int err, dcount;
 	unsigned int i;
 	char name[] = "FILE0000000.CHK";
-	struct exfat_dentry_loc loc = {
-		.parent = exfat->lostfound,
-	};
+	struct exfat_dentry_loc loc;
 	struct exfat_lookup_filter lf = {
 		.in.type = EXFAT_INVAL,
 		.in.filter = NULL,
 	};
 
-	/* get the last empty region of LOST+FOUND */
-	err = exfat_lookup_dentry_set(exfat, exfat->lostfound, &lf);
-	if (err && err != EOF) {
-		exfat_err("failed to find the last empty slot in LOST+FOUNDn");
+	err = read_lostfound(exfat, &lostfound);
+	if (err) {
+		exfat_err("failed to find LOST+FOUND\n");
 		return err;
 	}
+
+	/* get the last empty region of LOST+FOUND */
+	err = exfat_lookup_dentry_set(exfat, lostfound, &lf);
+	if (err && err != EOF) {
+		exfat_err("failed to find the last empty slot in LOST+FOUND\n");
+		goto out;
+	}
+
+	loc.parent = lostfound;
 	loc.file_offset = lf.out.file_offset;
 	loc.dev_offset = lf.out.dev_offset;
 	free(lf.out.dentry_set);
@@ -1178,7 +1214,7 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 	err = exfat_build_file_dentry_set(exfat, name, 0, &dset, &dcount);
 	if (err) {
 		exfat_err("failed to create a temporary file in LOST+FOUNDn");
-		return err;
+		goto out;
 	}
 
 	clu_count = le32_to_cpu(exfat->bs->bsx.clu_count);
@@ -1252,7 +1288,10 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 	}
 
 	free(dset);
-	return 0;
+	err = 0;
+out:
+	free_exfat_inode(lostfound);
+	return err;
 }
 
 static char *bytes_to_human_readable(size_t bytes)
@@ -1415,16 +1454,11 @@ int main(int argc, char * const argv[])
 	}
 
 	if (exfat_fsck.options & FSCK_OPTS_RESCUE_CLUS) {
-		struct exfat_inode *lostfound;
-		struct exfat_dentry *dset = NULL;
-		off_t offset;
-		int dcount;
-
 		ret = exfat_create_file(exfat_fsck.exfat,
 					exfat_fsck.exfat->root,
 					"LOST+FOUND",
 					ATTR_SUBDIR,
-					&dset, &dcount, &offset);
+					NULL, NULL, NULL);
 		if (ret) {
 			exfat_err("failed to create lost+found directory\n");
 			goto out;
@@ -1432,27 +1466,9 @@ int main(int argc, char * const argv[])
 
 		if (fsync(exfat_fsck.exfat->blk_dev->dev_fd) != 0) {
 			ret = -EIO;
-			free(dset);
 			exfat_err("failed to sync()\n");
 			goto out;
 		}
-
-		/* TODO: create lost+found inode in rescue_orphan_clusters */
-		lostfound = alloc_exfat_inode(ATTR_SUBDIR);
-		if (!lostfound) {
-			ret = -ENOMEM;
-			free(dset);
-			goto out;
-		}
-
-		lostfound->dentry_set = dset;
-		lostfound->dentry_count = dcount;
-		lostfound->dev_offset = offset;
-
-		lostfound->first_clus =
-			le32_to_cpu(dset[1].dentry.stream.start_clu);
-		lostfound->size = le64_to_cpu(dset[1].dentry.stream.size);
-		exfat_fsck.exfat->lostfound = lostfound;
 	}
 
 	exfat_debug("verifying directory entries...\n");
