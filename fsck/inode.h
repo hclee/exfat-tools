@@ -44,8 +44,6 @@ struct exfat {
 	clus_t			disk_bitmap_clus;
 	unsigned int		disk_bitmap_size;
 	__u16			*upcase_table;
-	struct exfat_inode	*lostfound;
-	off_t			lostfound_dent_offset;
 	clus_t			start_clu;
 	char			*zero_cluster;
 };
