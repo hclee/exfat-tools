@@ -87,14 +87,18 @@ static void usage(char *name)
 			##__VA_ARGS__);			\
 })
 
-#define repair_file_ask(iter, inode, code, fmt, ...)	\
-({							\
-		resolve_path_parent(&path_resolve_ctx,	\
-				(iter)->parent, inode);	\
-		exfat_repair_ask(&exfat_fsck, code,	\
-			"ERROR: %s: " fmt,		\
-			path_resolve_ctx.local_path,	\
-			##__VA_ARGS__);			\
+#define repair_file_ask(iter, inode, code, fmt, ...)			\
+({									\
+		if (inode)						\
+			resolve_path_parent(&path_resolve_ctx,		\
+					    (iter)->parent, inode);	\
+		else							\
+			resolve_path(&path_resolve_ctx,			\
+				     (iter)->parent);			\
+		exfat_repair_ask(&exfat_fsck, code,			\
+			"ERROR: %s: " fmt,				\
+			path_resolve_ctx.local_path,			\
+			##__VA_ARGS__);					\
 })
 
 static int check_clus_chain(struct exfat_de_iter *de_iter,
@@ -934,22 +938,26 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 			} else
 				free_exfat_inode(node);
 			break;
-		case EXFAT_VOLUME:
-			if (!read_volume_label(de_iter)) {
-				exfat_err("failed to verify volume label\n");
-				ret = -EINVAL;
-				goto err;
-			}
-			break;
-		case EXFAT_BITMAP:
-		case EXFAT_UPCASE:
-			break;
 		case EXFAT_LAST:
 			goto out;
+		case EXFAT_VOLUME:
+		case EXFAT_BITMAP:
+		case EXFAT_UPCASE:
+			if (dir == exfat->root)
+				break;
+			/* fall through */
 		default:
-			if (!IS_EXFAT_DELETED(dentry->type))
-				exfat_err("unknown entry type. 0x%x\n",
-					  dentry->type);
+			if (IS_EXFAT_DELETED(dentry->type))
+				break;
+			if (repair_file_ask(de_iter, NULL, ER_DE_UNKNOWN,
+					    "unknown entry type %#x at %07" PRIx64,
+					    dentry->type,
+					    exfat_de_iter_file_offset(de_iter))) {
+				struct exfat_dentry *dentry;
+
+				exfat_de_iter_get_dirty(de_iter, 0, &dentry);
+				dentry->type &= EXFAT_DELETE;
+			}
 			break;
 		}
 
