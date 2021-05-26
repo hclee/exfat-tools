@@ -692,33 +692,43 @@ static int read_file(struct exfat_de_iter *de_iter,
 	return ret;
 }
 
-static bool read_volume_label(struct exfat_de_iter *iter)
+static int read_volume_label(struct exfat *exfat)
 {
-	struct exfat *exfat;
 	struct exfat_dentry *dentry;
+	int err;
 	__le16 disk_label[VOLUME_LABEL_MAX_LEN];
+	struct exfat_lookup_filter filter = {
+		.in.type = EXFAT_VOLUME,
+		.in.filter = NULL,
+	};
 
-	exfat = iter->exfat;
-	if (exfat_de_iter_get(iter, 0, &dentry))
-		return false;
+	err = exfat_lookup_dentry_set(exfat, exfat->root, &filter);
+	if (err)
+		return err;
+
+	dentry = filter.out.dentry_set;
 
 	if (dentry->vol_char_cnt == 0)
-		return true;
+		goto out;
 
 	if (dentry->vol_char_cnt > VOLUME_LABEL_MAX_LEN) {
 		exfat_err("too long label. %d\n", dentry->vol_char_cnt);
-		return false;
+		err = -EINVAL;
+		goto out;
 	}
 
 	memcpy(disk_label, dentry->vol_label, sizeof(disk_label));
 	if (exfat_utf16_dec(disk_label, dentry->vol_char_cnt*2,
 		exfat->volume_label, sizeof(exfat->volume_label)) < 0) {
 		exfat_err("failed to decode volume label\n");
-		return false;
+		err = -EINVAL;
+		goto out;
 	}
 
 	exfat_info("volume label [%s]\n", exfat->volume_label);
-	return true;
+out:
+	free(filter.out.dentry_set);
+	return err;
 }
 
 static int read_bitmap(struct exfat *exfat)
@@ -1080,6 +1090,12 @@ static int exfat_root_dir_check(struct exfat *exfat)
 	exfat_stat.dir_count++;
 	exfat_debug("root directory: start cluster[0x%x] size[0x%" PRIx64 "]\n",
 		root->first_clus, root->size);
+
+	err = read_volume_label(exfat);
+	if (err) {
+		exfat_err("failed to read volume label\n");
+		return -EINVAL;
+	}
 
 	err = read_bitmap(exfat);
 	if (err) {
