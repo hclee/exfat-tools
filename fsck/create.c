@@ -47,8 +47,8 @@ static uint16_t calc_dentry_set_checksum(struct exfat_dentry *dset, int dcount)
 	return checksum;
 }
 
-static uint16_t calc_name_checksum(struct exfat *exfat,
-				       __le16 *name, int len)
+uint16_t exfat_calc_name_hash(struct exfat *exfat,
+			       __le16 *name, int len)
 {
 	int i;
 	__le16 ch;
@@ -128,7 +128,7 @@ int exfat_build_file_dentry_set(struct exfat *exfat, const char *name,
 	dset[1].dentry.stream.flags = 0x01;
 	dset[1].dentry.stream.name_len = (__u8)name_len;
 	dset[1].dentry.stream.name_hash = cpu_to_le16(
-			calc_name_checksum(exfat, utf16_name, name_len));
+			exfat_calc_name_hash(exfat, utf16_name, name_len));
 
 	for (i = 2; i < dcount; i++) {
 		dset[i].type = EXFAT_NAME;
@@ -171,7 +171,7 @@ int exfat_update_file_dentry_set(struct exfat *exfat,
 
 		dset[1].dentry.stream.name_len = (__u8)name_len;
 		dset[1].dentry.stream.name_hash = cpu_to_le16(
-			calc_name_checksum(exfat, utf16_name, name_len));
+			exfat_calc_name_hash(exfat, utf16_name, name_len));
 
 		for (i = 2; i < dcount; i++) {
 			dset[i].type = EXFAT_NAME;
