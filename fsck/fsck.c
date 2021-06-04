@@ -96,9 +96,10 @@ static void usage(char *name)
 			resolve_path(&path_resolve_ctx,			\
 				     (iter)->parent);			\
 		exfat_repair_ask(&exfat_fsck, code,			\
-			"ERROR: %s: " fmt,				\
+			"ERROR: %s: " fmt " at %#" PRIx64,		\
 			path_resolve_ctx.local_path,			\
-			##__VA_ARGS__);					\
+			##__VA_ARGS__,					\
+			exfat_de_iter_device_offset(iter));		\
 })
 
 static int check_clus_chain(struct exfat_de_iter *de_iter,
@@ -121,7 +122,9 @@ static int check_clus_chain(struct exfat_de_iter *de_iter,
 	if ((node->size == 0 && node->first_clus != EXFAT_FREE_CLUSTER) ||
 		(node->size > 0 && !heap_clus(exfat, node->first_clus))) {
 		if (repair_file_ask(de_iter, node,
-			ER_FILE_FIRST_CLUS, "first cluster is wrong"))
+				    ER_FILE_FIRST_CLUS,
+				    "size %#" PRIx64 ", but the first cluster %#x",
+				    node->size, node->first_clus))
 			goto truncate_file;
 		else
 			return -EINVAL;
@@ -950,9 +953,8 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 			if (IS_EXFAT_DELETED(dentry->type))
 				break;
 			if (repair_file_ask(de_iter, NULL, ER_DE_UNKNOWN,
-					    "unknown entry type %#x at %07" PRIx64,
-					    dentry->type,
-					    exfat_de_iter_file_offset(de_iter))) {
+					    "unknown entry type %#x",
+					    dentry->type)) {
 				struct exfat_dentry *dentry;
 
 				exfat_de_iter_get_dirty(de_iter, 0, &dentry);
