@@ -265,8 +265,9 @@ int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
 {
 	clus_t start, last_clu;
 	int err;
+	bool need_dset = inode != exfat->root;
 
-	if (!inode->dentry_set || inode->dev_offset == 0)
+	if (need_dset && (!inode->dentry_set || inode->dev_offset == 0))
 		return -EINVAL;
 
 	if (exfat->start_clu != EXFAT_EOF_CLUSTER)
@@ -303,23 +304,32 @@ int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
 		if (set_fat(exfat, last_clu, *new_clu))
 			return -EIO;
 
-		err = exfat_update_file_dentry_set(exfat, inode->dentry_set,
-				inode->dentry_count, NULL, 0,
-				DIV_ROUND_UP(inode->size, exfat->clus_size) + 1);
-		if (err)
-			return -EIO;
+		if (need_dset) {
+			err = exfat_update_file_dentry_set(exfat,
+					   inode->dentry_set,
+					   inode->dentry_count,
+					   NULL, 0,
+					   DIV_ROUND_UP(inode->size,
+							exfat->clus_size) + 1);
+			if (err)
+				return -EIO;
+		}
 	} else {
-		err = exfat_update_file_dentry_set(exfat, inode->dentry_set,
-				inode->dentry_count, NULL, *new_clu, 1);
-		if (err)
-			return -EIO;
+		if (need_dset) {
+			err = exfat_update_file_dentry_set(exfat,
+							   inode->dentry_set,
+							   inode->dentry_count,
+							   NULL, *new_clu, 1);
+			if (err)
+				return -EIO;
+		}
 	}
 
 	/* TODO: handle the dentry set which locates in two clusters */
-	if (inode != exfat->root && exfat_write(exfat->blk_dev->dev_fd,
+	if (need_dset &&
+	    exfat_write(exfat->blk_dev->dev_fd,
 			inode->dentry_set, inode->dentry_count * DENTRY_SIZE,
-			inode->dev_offset) !=
-			(ssize_t)inode->dentry_count * DENTRY_SIZE)
+			inode->dev_offset) != (ssize_t)inode->dentry_count * DENTRY_SIZE)
 		return -EIO;
 
 	exfat_bitmap_set(exfat->alloc_bitmap, *new_clu);
