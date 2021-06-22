@@ -15,12 +15,17 @@ enum fsck_ui_options {
 	FSCK_OPTS_RESCUE_CLUS	= 0x10,
 };
 
+enum fsck_flags {
+	FSCK_FLAGS_CANCEL	= 0x01,
+};
+
 struct exfat;
 struct exfat_inode;
 
 struct exfat_fsck {
 	struct exfat		*exfat;
 	struct exfat_de_iter	de_iter;
+	enum fsck_flags		flags;
 	struct buffer_desc	*buffer_desc;	/* cluster * 2 */
 	enum fsck_ui_options	options;
 	bool			dirty:1;

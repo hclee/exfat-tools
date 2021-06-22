@@ -12,6 +12,7 @@
 #include <string.h>
 #include <errno.h>
 #include <locale.h>
+#include <signal.h>
 
 #include "exfat_ondisk.h"
 #include "libexfat.h"
@@ -21,6 +22,12 @@
 #include "de_iter.h"
 #include "fsck.h"
 #include "repair.h"
+
+#ifdef __GNUC__
+#define UNUSED_VAR	__attribute__((unused))
+#else
+#define UNUSED_VAR
+#endif
 
 struct fsck_user_input {
 	struct exfat_user_input		ei;
@@ -48,6 +55,8 @@ struct exfat_stat {
 struct exfat_fsck exfat_fsck;
 struct exfat_stat exfat_stat;
 struct path_resolve_ctx path_resolve_ctx;
+
+#define FSCK_NEED_CANCEL()	(exfat_fsck.flags & FSCK_FLAGS_CANCEL)
 
 static struct option opts[] = {
 	{"repair",	no_argument,	NULL,	'r' },
@@ -1088,12 +1097,13 @@ static int write_dirty_bitmap(struct exfat_fsck *fsck)
 	idx = 0;
 
 	while (offset < last_offset) {
+		if (FSCK_NEED_CANCEL())
+			return -ECANCELED;
+
 		len = MIN(read_size, last_offset - offset);
 		if (exfat_read(exfat->blk_dev->dev_fd, bd[idx].buffer,
 				len, offset) != (ssize_t)len)
 			return -EIO;
-
-		/* TODO: read-ahead */
 
 		for (i = 0; i < len; i += write_size) {
 			size = MIN(write_size, len - i);
@@ -1116,11 +1126,12 @@ static int write_dirty_bitmap(struct exfat_fsck *fsck)
 
 static int free_unused_clusters(struct exfat_fsck *fsck)
 {
-	if (write_dirty_bitmap(fsck)) {
+	int err;
+
+	err = write_dirty_bitmap(fsck);
+	if (err)
 		exfat_err("failed to write bitmap\n");
-		return -EIO;
-	}
-	return 0;
+	return err;
 }
 
 /*
@@ -1152,6 +1163,11 @@ static int exfat_filesystem_check(struct exfat_fsck *fsck)
 				"failed to travel directories. "
 				"the node is not directory\n");
 			ret = -EINVAL;
+			goto out;
+		}
+
+		if (FSCK_NEED_CANCEL()) {
+			ret = -ECANCELED;
 			goto out;
 		}
 
@@ -1302,7 +1318,7 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 	struct exfat *exfat = fsck->exfat;
 	struct exfat_inode *lostfound;
 	bitmap_t *disk_b, *alloc_b, *ohead_b;
-	struct exfat_dentry *dset;
+	struct exfat_dentry *dset = NULL;
 	clus_t clu_count, clu, next, ccount;
 	int err, dcount;
 	unsigned int i;
@@ -1365,7 +1381,10 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 
 	/* for each orphan chain, follow the chain and handle corruption */
 	for (clu = EXFAT_FIRST_CLUSTER; clu < EXFAT_FIRST_CLUSTER + clu_count; clu++) {
-		if (exfat_bitmap_get(exfat->ohead_bitmap, clu)) {
+		if (FSCK_NEED_CANCEL()) {
+			err = -ECANCELED;
+			goto out;
+		} else if (exfat_bitmap_get(exfat->ohead_bitmap, clu)) {
 			if (!rescue_clus_chain(exfat, clu, &ccount)) {
 				/* a directory size is limited to 256MB */
 				snprintf(name, sizeof(name), "FILE%07d.CHK",
@@ -1388,8 +1407,11 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 	/* follow and handle cyclic or headless orphan chains */
 	for (clu = EXFAT_FIRST_CLUSTER; clu < EXFAT_FIRST_CLUSTER + clu_count; clu++) {
 		/* assume the cluster found is the start of a cyclic orphan chain */
-		if (is_orphan_clu(exfat, clu) &&
-		    !exfat_bitmap_get(exfat->ohead_bitmap, clu)) {
+		if (FSCK_NEED_CANCEL()) {
+			err = -ECANCELED;
+			goto out;
+		} else if (is_orphan_clu(exfat, clu) &&
+			   !exfat_bitmap_get(exfat->ohead_bitmap, clu)) {
 			if (!rescue_clus_chain(exfat, clu, &ccount)) {
 				exfat_bitmap_set(exfat->ohead_bitmap, clu);
 
@@ -1408,9 +1430,9 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 		}
 	}
 
-	free(dset);
 	err = 0;
 out:
+	free(dset);
 	free_exfat_inode(lostfound);
 	return err;
 }
@@ -1461,6 +1483,31 @@ static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name)
 		printf("%s: files corrupted %ld, files fixed %ld\n", dev_name,
 			exfat_stat.error_count - exfat_stat.fixed_count,
 			exfat_stat.fixed_count);
+}
+
+static void handle_cancel_signals(int signo, siginfo_t *info,
+				  void *uctx UNUSED_VAR)
+{
+	exfat_err("Will be canceled. Because of signal %d ", signo);
+	if (info->si_code == SI_USER)
+		exfat_err("from an user. pid %u\n", info->si_pid);
+	else
+		exfat_err("from %d\n", info->si_pid);
+
+	exfat_fsck.flags |= FSCK_FLAGS_CANCEL;
+}
+
+static int setup_signal_handlers(void)
+{
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_flags = SA_SIGINFO;
+	sa.sa_sigaction = handle_cancel_signals;
+
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	return 0;
 }
 
 int main(int argc, char * const argv[])
@@ -1536,6 +1583,8 @@ int main(int argc, char * const argv[])
 	}
 	exfat_fsck.options = ui.options;
 
+	setup_signal_handlers();
+
 	snprintf(ui.ei.dev_name, sizeof(ui.ei.dev_name), "%s", argv[optind]);
 	ret = exfat_get_blk_dev_info(&ui.ei, &bd);
 	if (ret < 0) {
@@ -1598,14 +1647,17 @@ int main(int argc, char * const argv[])
 		goto out;
 
 	if (exfat_fsck.options & FSCK_OPTS_RESCUE_CLUS) {
-		rescue_orphan_clusters(&exfat_fsck);
+		ret = rescue_orphan_clusters(&exfat_fsck);
+		if (ret)
+			goto out;
 		exfat_fsck.dirty = true;
 		exfat_fsck.dirty_fat = true;
 	}
 
-	if (exfat_fsck.dirty_fat && free_unused_clusters(&exfat_fsck)) {
-		ret = -EIO;
-		goto out;
+	if (exfat_fsck.dirty_fat) {
+		ret = free_unused_clusters(&exfat_fsck);
+		if (ret)
+			goto out;
 	}
 
 	if (ui.ei.writeable && fsync(bd.dev_fd)) {
@@ -1619,11 +1671,14 @@ int main(int argc, char * const argv[])
 out:
 	exfat_show_info(&exfat_fsck, ui.ei.dev_name);
 err:
-	if (ret && ret != -EINVAL)
-		exit_code = FSCK_EXIT_OPERATION_ERROR;
+	if (ret == -ECANCELED)
+		// need sync?
+		exit_code = FSCK_EXIT_USER_CANCEL;
 	else if (ret == -EINVAL ||
 		 exfat_stat.error_count != exfat_stat.fixed_count)
 		exit_code = FSCK_EXIT_ERRORS_LEFT;
+	else if (ret)
+		exit_code = FSCK_EXIT_OPERATION_ERROR;
 	else if (exfat_fsck.dirty)
 		exit_code = FSCK_EXIT_CORRECTED;
 	else
