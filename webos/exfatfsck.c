@@ -79,7 +79,7 @@ static int setup_timer(unsigned long timeout_secs)
 
 static int kill_fsck(void)
 {
-	kill(fsck_pid, SIGKILL);
+	kill(fsck_pid, SIGTERM);
 	waitpid(fsck_pid, NULL, 0);
 	return 0;
 }
