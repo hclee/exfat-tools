@@ -1020,6 +1020,11 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 			goto err;
 		}
 
+		if (FSCK_NEED_CANCEL()) {
+			ret = -ECANCELED;
+			goto err;
+		}
+
 		dentry_count = 1;
 
 		switch (dentry->type) {
@@ -1166,13 +1171,12 @@ static int exfat_filesystem_check(struct exfat_fsck *fsck)
 			goto out;
 		}
 
-		if (FSCK_NEED_CANCEL()) {
-			ret = -ECANCELED;
-			goto out;
-		}
-
 		dir_errors = read_children(fsck, dir);
 		if (dir_errors) {
+			if (dir_errors == -ECANCELED) {
+				ret = -ECANCELED;
+				goto out;
+			}
 			resolve_path(&path_resolve_ctx, dir);
 			exfat_debug("failed to check dentries: %s\n",
 					path_resolve_ctx.local_path);
