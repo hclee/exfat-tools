@@ -113,7 +113,7 @@ static int wait_for_fsck(int *exit_status)
 
 int main(int argc, char *argv[])
 {
-	char *fsck_argv[MAX_FSCK_ARGS + 1] = {FSCK_PROG, };
+	char *fsck_argv[MAX_FSCK_ARGS + 2] = {FSCK_PROG, };
 	char *device_file;
 	unsigned long timeout_secs = 0;
 	bool version_only = false, need_writeable = true;
@@ -144,6 +144,9 @@ int main(int argc, char *argv[])
 			if (strcmp(argv[i], "-n") == 0 ||
 			    strcmp(argv[i], "--repair-no") == 0)
 				need_writeable = false;
+
+			if (i == argc-1 && need_writeable)
+				fsck_argv[k++] = "-s";
 			fsck_argv[k++] = argv[i];
 		}
 		i++;
