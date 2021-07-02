@@ -16,10 +16,14 @@
 #define FSCK_PROG	"fsck.exfat"
 #define MAX_FSCK_ARGS	32
 
-#define EXIT_FORK		2
-#define EXIT_RO_DEVICE		23
-#define EXIT_DEVICE_REMOVED	160
-#define EXIT_TIMEOUT		161
+#define EFSCK_EXIT_SUCCESS		0
+#define EFSCK_EXIT_FAILURE		1
+#define EFSCK_EXIT_SYNTAX_ERROR		2
+#define EFSCK_EXIT_ERROR_LEFT		3
+#define EFSCK_EXIT_RO_DEVICE		23
+#define EFSCK_EXIT_ERROR_DIRTY		100
+#define EFSCK_EXIT_DEVICE_REMOVED	160
+#define EFSCK_EXIT_TIMEOUT		161
 
 #define FSCK_EXIT_NO_ERRORS		0x00
 #define FSCK_EXIT_CORRECTED		0x01
@@ -44,7 +48,7 @@ static void usage(char *name)
 	fprintf(stderr, "\t-t seconds             Run with a time limit\n");
 	fprintf(stderr, "\tAnd %s -h. This util just runs %s.\n",
 		FSCK_PROG, FSCK_PROG);
-	exit(EXIT_FAILURE);
+	exit(EFSCK_EXIT_SYNTAX_ERROR);
 }
 
 static void handle_timeout(int sig __unused, siginfo_t *si __unused,
@@ -99,7 +103,7 @@ static int wait_for_fsck(int *exit_status)
 				exfat_err("failed to waitpid: %s\n",
 					  strerror(errno));
 				kill_fsck();
-				*exit_status = EXIT_FAILURE;
+				*exit_status = EFSCK_EXIT_FAILURE;
 				return -EINVAL;
 			}
 		}
@@ -117,7 +121,7 @@ int main(int argc, char *argv[])
 	char *device_file;
 	unsigned long timeout_secs = 0;
 	bool version_only = false, need_writeable = true;
-	int fsck_status, exit_status = 0;
+	int fsck_status, exit_status = EFSCK_EXIT_SUCCESS;
 	int i, k;
 
 	print_level = EXFAT_ERROR;
@@ -164,17 +168,17 @@ int main(int argc, char *argv[])
 	if (fsck_pid < 0) {
 		exfat_err("failed to fork for %s: %s\n", FSCK_PROG,
 			  strerror(errno));
-		exit(EXIT_FORK);
+		exit(EFSCK_EXIT_FAILURE);
 	} else if (fsck_pid == 0) {
 		execvp(FSCK_PROG, fsck_argv);
 		exfat_err("failed to exec %s: %s\n", FSCK_PROG,
 			  strerror(errno));
-		exit(EXIT_FORK);
+		exit(EFSCK_EXIT_FAILURE);
 	}
 
 	if (timeout_secs && setup_timer(timeout_secs) != 0) {
 		kill_fsck();
-		exit_status = EXIT_FAILURE;
+		exit_status = EFSCK_EXIT_FAILURE;
 		goto out;
 	}
 
@@ -186,22 +190,22 @@ int main(int argc, char *argv[])
 
 		if (stat(device_file, &st) != 0) {
 			if (errno == ENOENT)
-				exit_status = EXIT_DEVICE_REMOVED;
+				exit_status = EFSCK_EXIT_DEVICE_REMOVED;
 			else
-				exit_status = EXIT_FAILURE;
+				exit_status = EFSCK_EXIT_FAILURE;
 			goto out;
 		}
 
 		if (need_writeable && ~(st.st_mode & S_IWUSR))
-			exit_status = EXIT_RO_DEVICE;
+			exit_status = EFSCK_EXIT_RO_DEVICE;
 	} else if (fsck_status == FSCK_EXIT_USER_CANCEL) {
 		exfat_debug("timer is expired. %s is killed\n", FSCK_PROG);
-		exit_status = EXIT_TIMEOUT;
+		exit_status = EFSCK_EXIT_TIMEOUT;
 	} else if (fsck_status == FSCK_EXIT_SYNTAX_ERROR) {
 		usage(argv[0]);
 	} else if (fsck_status != FSCK_EXIT_NO_ERRORS &&
 		   fsck_status != FSCK_EXIT_CORRECTED) {
-		exit_status = EXIT_FAILURE;
+		exit_status = EFSCK_EXIT_FAILURE;
 	}
 out:
 	exit(exit_status);
