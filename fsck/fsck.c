@@ -508,6 +508,7 @@ static int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
 	if (exfat_read(blkdev->dev_fd, boot_sect,
 		       sizeof(*boot_sect), 0) != (ssize_t)sizeof(*boot_sect)) {
 		exfat_err("failed to read Main boot sector\n");
+		free(boot_sect);
 		return -EIO;
 	}
 
