@@ -2,6 +2,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -16,10 +17,19 @@
 #define FSCK_PROG	"fsck.exfat"
 #define MAX_FSCK_ARGS	32
 
-#define EXIT_FORK		2
-#define EXIT_RO_DEVICE		23
-#define EXIT_DEVICE_REMOVED	160
-#define EXIT_TIMEOUT		161
+/**
+ * EFSCK_EXIT_FAILURE		Unknown or errors left
+ * EFSCK_EXIT_VOLUME_DIRTY	VolumeDirty flag in boot sector
+ * EFSCK_EXIT_USER_CANCEL	Killed by signal or device is removed
+ */
+#define EFSCK_EXIT_SUCCESS		0
+#define EFSCK_EXIT_FAILURE		1
+#define EFSCK_EXIT_SYNTAX_ERROR		2
+#define EFSCK_EXIT_NOT_FAT_VOLUME	3
+#define EFSCK_EXIT_RO_DEVICE		23
+#define EFSCK_EXIT_VOLUME_DIRTY		100
+#define EFSCK_EXIT_USER_CANCEL		160
+#define EFSCK_EXIT_TIMEOUT		161
 
 #define FSCK_EXIT_NO_ERRORS		0x00
 #define FSCK_EXIT_CORRECTED		0x01
@@ -44,7 +54,14 @@ static void usage(char *name)
 	fprintf(stderr, "\t-t seconds             Run with a time limit\n");
 	fprintf(stderr, "\tAnd %s -h. This util just runs %s.\n",
 		FSCK_PROG, FSCK_PROG);
-	exit(EXIT_FAILURE);
+	exit(EFSCK_EXIT_SYNTAX_ERROR);
+}
+
+static int kill_fsck(void)
+{
+	kill(fsck_pid, SIGTERM);
+	waitpid(fsck_pid, NULL, 0);
+	return 0;
 }
 
 static void handle_timeout(int sig __unused, siginfo_t *si __unused,
@@ -53,34 +70,44 @@ static void handle_timeout(int sig __unused, siginfo_t *si __unused,
 	exfat_debug("timer is expired!\n");
 }
 
-static int setup_timer(unsigned long timeout_secs)
+static void handle_cancel_signals(int sig, siginfo_t *si __unused,
+				  void *u __unused)
+{
+	exfat_err("killed by signal %d\n", sig);
+	kill_fsck();
+	exit(EFSCK_EXIT_USER_CANCEL);
+}
+
+static int setup_signal_handlers(unsigned long timeout_secs)
 {
 	struct sigaction sa;
 	sigset_t sigmask;
 
-	sa.sa_flags = SA_SIGINFO;
-	sa.sa_sigaction = handle_timeout;
-	sigemptyset(&sa.sa_mask);
-	if (sigaction(SIGALRM, &sa, NULL) != 0) {
-		exfat_err("failed to set signal handler: %s\n",
-			  strerror(errno));
-		return -1;
-	}
-
 	sigfillset(&sigmask);
 	sigdelset(&sigmask, SIGCHLD);
 	sigdelset(&sigmask, SIGALRM);
-	if (sigprocmask(SIG_BLOCK, &sigmask, NULL) != 0)
+	sigdelset(&sigmask, SIGINT);
+	sigdelset(&sigmask, SIGTERM);
+	if (sigprocmask(SIG_SETMASK, &sigmask, NULL) != 0)
 		exfat_err("sigprocmask failed: %s\n", strerror(errno));
 
-	alarm((unsigned int)timeout_secs);
-	return 0;
-}
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_sigaction = handle_cancel_signals;
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
 
-static int kill_fsck(void)
-{
-	kill(fsck_pid, SIGTERM);
-	waitpid(fsck_pid, NULL, 0);
+	if (timeout_secs) {
+		sa.sa_sigaction = handle_timeout;
+		if (sigaction(SIGALRM, &sa, NULL) != 0) {
+			exfat_err("failed to set signal handler: %s\n",
+				  strerror(errno));
+			return -1;
+		}
+
+		alarm((unsigned int)timeout_secs);
+	}
 	return 0;
 }
 
@@ -99,7 +126,7 @@ static int wait_for_fsck(int *exit_status)
 				exfat_err("failed to waitpid: %s\n",
 					  strerror(errno));
 				kill_fsck();
-				*exit_status = EXIT_FAILURE;
+				*exit_status = EFSCK_EXIT_FAILURE;
 				return -EINVAL;
 			}
 		}
@@ -111,13 +138,43 @@ static int wait_for_fsck(int *exit_status)
 	return 0;
 }
 
+static bool is_exfat_volume(const char *device_file)
+{
+	int fd;
+	ssize_t bytes;
+	char sect[512];
+
+	fd = open(device_file, O_RDONLY);
+	if (fd < 0) {
+		exfat_err("failed to open %s to check exfat volume: %s\n",
+			  device_file, strerror(errno));
+		return false;
+	}
+
+	bytes = read(fd, sect, sizeof(sect));
+	if (bytes != (ssize_t)sizeof(sect)) {
+		exfat_err("failed to read %s to check exfat volume\n",
+			  device_file);
+		close(fd);
+		return false;
+	}
+
+	if (memcmp(sect + 3, "EXFAT   ", 8) != 0) {
+		close(fd);
+		return false;
+	}
+
+	close(fd);
+	return true;
+}
+
 int main(int argc, char *argv[])
 {
 	char *fsck_argv[MAX_FSCK_ARGS + 2] = {FSCK_PROG, };
 	char *device_file;
 	unsigned long timeout_secs = 0;
 	bool version_only = false, need_writeable = true;
-	int fsck_status, exit_status = 0;
+	int fsck_status, exit_status = EFSCK_EXIT_SUCCESS;
 	int i, k;
 
 	print_level = EXFAT_ERROR;
@@ -164,17 +221,17 @@ int main(int argc, char *argv[])
 	if (fsck_pid < 0) {
 		exfat_err("failed to fork for %s: %s\n", FSCK_PROG,
 			  strerror(errno));
-		exit(EXIT_FORK);
+		exit(EFSCK_EXIT_FAILURE);
 	} else if (fsck_pid == 0) {
 		execvp(FSCK_PROG, fsck_argv);
 		exfat_err("failed to exec %s: %s\n", FSCK_PROG,
 			  strerror(errno));
-		exit(EXIT_FORK);
+		exit(EFSCK_EXIT_FAILURE);
 	}
 
-	if (timeout_secs && setup_timer(timeout_secs) != 0) {
+	if (setup_signal_handlers(timeout_secs) != 0) {
 		kill_fsck();
-		exit_status = EXIT_FAILURE;
+		exit_status = EFSCK_EXIT_FAILURE;
 		goto out;
 	}
 
@@ -186,22 +243,30 @@ int main(int argc, char *argv[])
 
 		if (stat(device_file, &st) != 0) {
 			if (errno == ENOENT)
-				exit_status = EXIT_DEVICE_REMOVED;
+				exit_status = EFSCK_EXIT_USER_CANCEL;
 			else
-				exit_status = EXIT_FAILURE;
+				exit_status = EFSCK_EXIT_FAILURE;
 			goto out;
 		}
 
 		if (need_writeable && ~(st.st_mode & S_IWUSR))
-			exit_status = EXIT_RO_DEVICE;
+			exit_status = EFSCK_EXIT_RO_DEVICE;
+		else
+			exit_status = EFSCK_EXIT_FAILURE;
 	} else if (fsck_status == FSCK_EXIT_USER_CANCEL) {
 		exfat_debug("timer is expired. %s is killed\n", FSCK_PROG);
-		exit_status = EXIT_TIMEOUT;
+		exit_status = EFSCK_EXIT_TIMEOUT;
 	} else if (fsck_status == FSCK_EXIT_SYNTAX_ERROR) {
 		usage(argv[0]);
-	} else if (fsck_status != FSCK_EXIT_NO_ERRORS &&
+	} else if (fsck_status == FSCK_EXIT_ERRORS_LEFT) {
+		if (is_exfat_volume(device_file)) {
+			exfat_err("there are still errors after fsck\n");
+			exit_status = EFSCK_EXIT_FAILURE;
+		}  else
+			exit_status = EFSCK_EXIT_NOT_FAT_VOLUME;
+	}  else if (fsck_status != FSCK_EXIT_NO_ERRORS &&
 		   fsck_status != FSCK_EXIT_CORRECTED) {
-		exit_status = EXIT_FAILURE;
+		exit_status = EFSCK_EXIT_FAILURE;
 	}
 out:
 	exit(exit_status);
