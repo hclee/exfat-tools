@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <time.h>
 
+#include "version.h"
 #include "exfat_ondisk.h"
 #include "libexfat.h"
 
@@ -48,6 +49,7 @@ pid_t fsck_pid;
 
 static void usage(char *name)
 {
+	printf("exfatprogs version : %s\n", WEBOS_EXFAT_PROGS_VERSION);
 	fprintf(stderr, "Usage: %s\n", name);
 	fprintf(stderr, "\t-h                     Show help\n");
 	fprintf(stderr, "\t-V                     Show version\n");
@@ -211,10 +213,8 @@ int main(int argc, char *argv[])
 	device_file = fsck_argv[k-1];
 	fsck_argv[k] = NULL;
 
-	if (version_only) {
-		show_version();
+	if (version_only)
 		usage(argv[0]);
-	}
 
 	/* run fsck */
 	fsck_pid = fork();
