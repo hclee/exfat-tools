@@ -93,6 +93,8 @@ void exfat_free_dir_list(struct exfat *exfat)
 	struct exfat_inode *dir, *i;
 
 	list_for_each_entry_safe(dir, i, &exfat->dir_list, list) {
+		if (dir->parent == NULL)
+			continue;
 		inode_free_file_children(dir);
 		list_del(&dir->list);
 		free_exfat_inode(dir);

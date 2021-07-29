@@ -259,7 +259,9 @@ static int exfat_map_cluster(struct exfat *exfat, struct exfat_inode *inode,
 	return -EINVAL;
 }
 
-/* TODO: handle contiguous allocation file */
+/* TODO: Because this function is called only for the root and
+ * the lost+found, we need to handle the @inode which has no FAT.
+ */
 int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
 			clus_t *new_clu, bool zero_fill)
 {
@@ -325,17 +327,41 @@ int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
 		}
 	}
 
-	/* TODO: handle the dentry set which locates in two clusters */
-	if (need_dset &&
-	    exfat_write(exfat->blk_dev->dev_fd,
-			inode->dentry_set, inode->dentry_count * DENTRY_SIZE,
-			inode->dev_offset) != (ssize_t)inode->dentry_count * DENTRY_SIZE)
-		return -EIO;
-
-	exfat_bitmap_set(exfat->alloc_bitmap, *new_clu);
 	if (inode->size == 0)
 		inode->first_clus = *new_clu;
 	inode->size += exfat->clus_size;
+
+	if (need_dset) {
+		size_t len;
+
+		len = exfat->clus_size - inode->dev_offset % exfat->clus_size;
+		len = MIN(len, (size_t)inode->dentry_count * DENTRY_SIZE);
+		if (exfat_write(exfat->blk_dev->dev_fd, inode->dentry_set, len,
+				inode->dev_offset) != (ssize_t)len)
+			return -EIO;
+		if (len < (size_t)inode->dentry_count * DENTRY_SIZE) {
+			char *dent;
+			off_t offset;
+			clus_t clu, next;
+			unsigned int tmp;
+
+			if (exfat_o2c(exfat, inode->dev_offset,
+				      &clu, &tmp) != 0)
+				return -ERANGE;
+			if (get_next_clus(exfat, clu, &next) != 0)
+				return -EIO;
+
+			offset = exfat_c2o(exfat, next);
+			dent = (char *)inode->dentry_set + len;
+			len = inode->dentry_count * DENTRY_SIZE - len;
+			if (exfat_write(exfat->blk_dev->dev_fd, dent,
+					len, offset) != (ssize_t)len)
+				return -EIO;
+
+		}
+	}
+
+	exfat_bitmap_set(exfat->alloc_bitmap, *new_clu);
 	return 0;
 }
 
