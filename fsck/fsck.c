@@ -811,7 +811,7 @@ static int read_volume_label(struct exfat *exfat)
 
 	err = exfat_lookup_dentry_set(exfat, exfat->root, &filter);
 	if (err)
-		return err;
+		return err == EOF ? 0 : err;
 
 	dentry = filter.out.dentry_set;
 
