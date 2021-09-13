@@ -53,9 +53,10 @@ static void usage(char *name)
 	fprintf(stderr, "Usage: %s\n", name);
 	fprintf(stderr, "\t-h                     Show help\n");
 	fprintf(stderr, "\t-V                     Show version\n");
+	fprintf(stderr, "\t-a                     Exit if Volume flag is clean\n");
+	fprintf(stderr, "\t-y                     Repair the filesystem without user interaction\n");
 	fprintf(stderr, "\t-t seconds             Run with a time limit\n");
-	fprintf(stderr, "\tAnd %s -h. This util just runs %s.\n",
-		FSCK_PROG, FSCK_PROG);
+	fprintf(stderr, "This util just runs %s.\n", FSCK_PROG);
 	exit(EFSCK_EXIT_SYNTAX_ERROR);
 }
 
@@ -140,33 +141,51 @@ static int wait_for_fsck(int *exit_status)
 	return 0;
 }
 
-static bool is_exfat_volume(const char *device_file)
+static int read_boot_sect(const char *device_file, char sect[], size_t len)
 {
 	int fd;
 	ssize_t bytes;
-	char sect[512];
 
 	fd = open(device_file, O_RDONLY);
 	if (fd < 0) {
 		exfat_err("failed to open %s to check exfat volume: %s\n",
 			  device_file, strerror(errno));
-		return false;
+		return fd;
 	}
 
-	bytes = read(fd, sect, sizeof(sect));
-	if (bytes != (ssize_t)sizeof(sect)) {
+	bytes = read(fd, sect, len);
+	if (bytes != (ssize_t)len) {
 		exfat_err("failed to read %s to check exfat volume\n",
 			  device_file);
 		close(fd);
-		return false;
-	}
-
-	if (memcmp(sect + 3, "EXFAT   ", 8) != 0) {
-		close(fd);
-		return false;
+		return -EIO;
 	}
 
 	close(fd);
+	return 0;
+}
+
+static bool is_exfat_clean(const char *device_file)
+{
+	char sect[512];
+
+	if (read_boot_sect(device_file, sect, sizeof(sect)) != 0)
+		return false;
+
+	if (sect[106] && 0x2)
+		return false;
+	return true;
+}
+
+static bool is_exfat_volume(const char *device_file)
+{
+	char sect[512];
+
+	if (read_boot_sect(device_file, sect, sizeof(sect)) != 0)
+		return false;
+
+	if (memcmp(sect + 3, "EXFAT   ", 8) != 0)
+		return false;
 	return true;
 }
 
@@ -175,7 +194,7 @@ int main(int argc, char *argv[])
 	char *fsck_argv[MAX_FSCK_ARGS + 2] = {FSCK_PROG, };
 	char *device_file;
 	unsigned long timeout_secs = 0;
-	bool version_only = false, need_writeable = true;
+	bool version_only = false, exit_if_clean_volume = false;
 	int fsck_status, exit_status = EFSCK_EXIT_SUCCESS;
 	int i, k;
 
@@ -184,6 +203,8 @@ int main(int argc, char *argv[])
 	/* handle options */
 	i = k = 1;
 	while (i < argc) {
+		if (k >= MAX_FSCK_ARGS)
+			usage(argv[0]);
 		if (strcmp(argv[i], "-V") == 0)
 			version_only = true;
 		else if (strcmp(argv[i], "-h") == 0)
@@ -197,15 +218,16 @@ int main(int argc, char *argv[])
 			timeout_secs = strtoul(argv[++i], &endptr, 10);
 			if (endptr && *endptr != '\0')
 				usage(argv[0]);
+		} else if (strcmp(argv[i], "-a") == 0) {
+			exit_if_clean_volume = true;
+			fsck_argv[k++] = "-y";
+			fsck_argv[k++] = "-s";
+		} else if (strcmp(argv[i], "-y") == 0) {
+			fsck_argv[k++] = "-y";
+			fsck_argv[k++] = "-s";
+		} else if (strcmp(argv[i], "-") == 0) {
+			usage(argv[0]);
 		} else {
-			if (k >= MAX_FSCK_ARGS)
-				usage(argv[0]);
-			if (strcmp(argv[i], "-n") == 0 ||
-			    strcmp(argv[i], "--repair-no") == 0)
-				need_writeable = false;
-
-			if (i == argc-1 && need_writeable)
-				fsck_argv[k++] = "-s";
 			fsck_argv[k++] = argv[i];
 		}
 		i++;
@@ -215,6 +237,9 @@ int main(int argc, char *argv[])
 
 	if (version_only)
 		usage(argv[0]);
+
+	if (exit_if_clean_volume && is_exfat_clean(device_file))
+		exit(EFSCK_EXIT_SUCCESS);
 
 	/* run fsck */
 	fsck_pid = fork();
@@ -249,10 +274,10 @@ int main(int argc, char *argv[])
 			goto out;
 		}
 
-		if (need_writeable && ~(st.st_mode & S_IWUSR))
-			exit_status = EFSCK_EXIT_RO_DEVICE;
-		else
+		if (st.st_mode & S_IWUSR)
 			exit_status = EFSCK_EXIT_FAILURE;
+		else
+			exit_status = EFSCK_EXIT_RO_DEVICE;
 	} else if (fsck_status == FSCK_EXIT_USER_CANCEL) {
 		exfat_debug("timer is expired. %s is killed\n", FSCK_PROG);
 		exit_status = EFSCK_EXIT_TIMEOUT;
