@@ -169,6 +169,14 @@ static int check_clus_chain(struct exfat_de_iter *de_iter,
 				return -EINVAL;
 		}
 
+		if (!exfat_bitmap_get(exfat->disk_bitmap, clus)) {
+			if (!repair_file_ask(de_iter, node,
+					     ER_FILE_INVALID_CLUS,
+					     "cluster %#x is marked as free",
+					     clus))
+				return -EINVAL;
+		}
+
 		/* This cluster is allocated or not */
 		if (get_inode_next_clus(exfat, node, clus, &next))
 			goto truncate_file;
