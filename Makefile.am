@@ -2,7 +2,7 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = lib mkfs fsck tune label dump	\
+SUBDIRS = lib mkfs fsck tune label dump	misc \
 	  webos
 
 # manpages

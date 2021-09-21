@@ -32,6 +32,7 @@ AC_CONFIG_FILES([
 	tune/Makefile
 	label/Makefile
 	dump/Makefile
+	misc/Makefile
 	webos/Makefile
 ])
 
