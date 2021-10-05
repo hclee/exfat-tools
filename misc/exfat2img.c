@@ -222,10 +222,13 @@ static int dump_directory(struct exfat2img *ei,
 			  clus_t *out_clus_count)
 {
 	struct exfat *exfat = ei->exfat;
-	clus_t clus;
+	clus_t clus, possible_count;
 	uint64_t max_count;
 	size_t dump_size;
 	off_t start_off, end_off;
+
+	if (size == 0)
+		return -EINVAL;
 
 	if (!(inode->attr & ATTR_SUBDIR))
 		return -EINVAL;
@@ -234,7 +237,11 @@ static int dump_directory(struct exfat2img *ei,
 	*out_clus_count = 0;
 	max_count = DIV_ROUND_UP(inode->size, exfat->clus_size);
 
-	while (heap_clus(exfat, clus)) {
+	possible_count = (256 * MB) >> (exfat->bs->bsx.sect_per_clus_bits +
+					exfat->bs->bsx.sect_size_bits);
+	possible_count = MIN(possible_count, exfat->clus_count);
+
+	while (heap_clus(exfat, clus) && *out_clus_count < possible_count) {
 		dump_size = MIN(size, exfat->clus_size);
 		start_off = exfat_c2o(exfat, clus);
 		end_off = start_off + DIV_ROUND_UP(dump_size, 512) * 512;
