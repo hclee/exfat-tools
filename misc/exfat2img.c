@@ -459,14 +459,18 @@ static int read_children(struct exfat2img *ei, struct exfat_inode *dir,
 		case EXFAT_LAST:
 			goto out;
 		case EXFAT_BITMAP:
-			ret = read_bitmap(ei, de_iter);
-			if (ret)
-				exfat_debug("failed to read bitmap\n");
+			if (dir == exfat->root) {
+				ret = read_bitmap(ei, de_iter);
+				if (ret)
+					exfat_debug("failed to read bitmap\n");
+			}
 			break;
 		case EXFAT_UPCASE:
-			ret = read_upcase_table(ei, de_iter);
-			if (ret)
-				exfat_debug("failed to upcase table\n");
+			if (dir == exfat->root) {
+				ret = read_upcase_table(ei, de_iter);
+				if (ret)
+					exfat_debug("failed to upcase table\n");
+			}
 			break;
 		case EXFAT_VOLUME:
 		default:
