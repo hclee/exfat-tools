@@ -144,7 +144,7 @@ static int filter_lookup_file(struct exfat_de_iter *de_iter,
 	name = (__le16 *)param;
 	name_len = (int)exfat_utf16_len(name, PATH_MAX);
 
-	if (file_de->dentry.file.num_ext <
+	if (file_de->dentry.file.num_ext !=
 		1 + (name_len + ENTRY_NAME_MAX - 1) / ENTRY_NAME_MAX)
 		return 1;
 
