@@ -171,7 +171,7 @@ static int check_clus_chain(struct exfat_de_iter *de_iter,
 
 		if (!exfat_bitmap_get(exfat->disk_bitmap, clus)) {
 			if (!repair_file_ask(de_iter, node,
-					     ER_FILE_INVALID_CLUS,
+					     ER_FILE_FREE_CLUS,
 					     "cluster %#x is marked as free",
 					     clus))
 				return -EINVAL;

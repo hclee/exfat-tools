@@ -22,6 +22,7 @@
 #define ER_FILE_LARGER_SIZE		0x00002005
 #define ER_FILE_DUPLICATED_CLUS		0x00002006
 #define ER_FILE_ZERO_NOFAT		0x00002007
+#define ER_FILE_FREE_CLUS		0x00002008
 
 typedef unsigned int er_problem_code_t;
 
