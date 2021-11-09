@@ -133,7 +133,7 @@ int exfat_build_file_dentry_set(struct exfat *exfat, const char *name,
 	for (i = 2; i < dcount; i++) {
 		dset[i].type = EXFAT_NAME;
 		memcpy(dset[i].dentry.name.unicode_0_14,
-		       utf16_name + (i - 2) * ENTRY_NAME_MAX * 2,
+		       utf16_name + (i - 2) * ENTRY_NAME_MAX,
 		       ENTRY_NAME_MAX * 2);
 	}
 
