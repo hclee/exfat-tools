@@ -8,6 +8,7 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <inttypes.h>
 
 #include "exfat_ondisk.h"
 #include "libexfat.h"
@@ -402,8 +403,38 @@ int exfat_add_dentry_set(struct exfat *exfat, struct exfat_dentry_loc *loc,
 			size = dcount * DENTRY_SIZE - size;
 		}
 		dev_offset = exfat_c2o(exfat, new_clu);
-	} else
-		dev_offset = loc->dev_offset;
+	} else {
+		if (exfat->clus_size -
+		    (unsigned int)(loc->file_offset % exfat->clus_size) < size) {
+			clus_t clus, next;
+			unsigned int clus_offset;
+
+			if (exfat_o2c(exfat, loc->dev_offset,
+				      &clus, &clus_offset)) {
+				exfat_err("%s: invalid device offset %#" PRIx64 "\n",
+					  __func__, loc->dev_offset);
+				return -EINVAL;
+			}
+			if (get_inode_next_clus(exfat, parent, clus, &next)) {
+				exfat_err("%s: invalid cluster %u\n",
+					  __func__, clus);
+				return -EINVAL;
+			}
+
+			size = exfat->clus_size - clus_offset;
+			if (size % DENTRY_SIZE)
+				return -EINVAL;
+
+			if (exfat_write(exfat->blk_dev->dev_fd, dset, size,
+					loc->dev_offset) != (ssize_t)size)
+				return -EIO;
+
+			dset = (struct exfat_dentry *)((char *)dset + size);
+			size = dcount * DENTRY_SIZE - size;
+			dev_offset = exfat_c2o(exfat, next);
+		} else
+			dev_offset = loc->dev_offset;
+	}
 
 	if (exfat_write(exfat->blk_dev->dev_fd, dset, size, dev_offset) !=
 	    (ssize_t)size)
