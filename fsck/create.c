@@ -251,7 +251,7 @@ static int exfat_map_cluster(struct exfat *exfat, struct exfat_inode *inode,
 		if (get_inode_next_clus(exfat, inode, clu, &next))
 			return -EINVAL;
 
-		if (!heap_clus(exfat, clu))
+		if (!heap_clus(exfat, next) && next != EXFAT_EOF_CLUSTER)
 			return -EINVAL;
 
 		clu = next;
