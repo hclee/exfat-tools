@@ -897,28 +897,25 @@ static int read_bitmap(struct exfat *exfat)
 static int decompress_upcase_table(const __le16 *in_table, size_t in_len,
 				    __u16 *out_table, size_t out_len)
 {
-	int i, k;
+	size_t i, k;
 	uint16_t ch;
 
 	if (in_len > out_len)
 		return -E2BIG;
 
-	i = 0;
-	while (i < (int)in_len) {
+	for (k = 0; k < out_len; k++)
+		out_table[k] = k;
+
+	for (i = 0, k = 0; i < in_len && k < out_len; i++) {
 		ch = le16_to_cpu(in_table[i]);
 
-		if (ch == 0xFFFF && i + 1 < (int)in_len) {
-			int len = (int)le16_to_cpu(in_table[i + 1]);
-
-			for (k = 0; k < len; k++)
-				out_table[i + k] = (uint16_t)(i + k);
-			i += len;
+		if (ch == 0xFFFF && i + 1 < in_len) {
+			uint16_t len = le16_to_cpu(in_table[++i]);
+			k += len;
 		} else
-			out_table[i++] = ch;
+			out_table[k++] = ch;
 	}
 
-	for (; i < (int)out_len; i++)
-		out_table[i] = (uint16_t)i;
 	return 0;
 }
 
@@ -1092,60 +1089,44 @@ err:
 	return ret;
 }
 
+/* write bitmap segments for clusters which are marked
+ * as free, but allocated to files.
+ */
 static int write_dirty_bitmap(struct exfat_fsck *fsck)
 {
 	struct exfat *exfat = fsck->exfat;
-	struct buffer_desc *bd;
-	off_t offset, last_offset, bitmap_offset;
-	ssize_t len;
-	ssize_t read_size, write_size, i, size;
-	int idx;
+	bitmap_t *disk_b, *alloc_b, *ohead_b;
+	off_t dev_offset;
+	unsigned int i, bitmap_bytes, byte_offset, write_bytes;
 
-	offset = exfat_c2o(exfat, exfat->disk_bitmap_clus);
-	last_offset = offset + exfat->disk_bitmap_size;
-	bitmap_offset = 0;
-	read_size = exfat->clus_size;
-	write_size = exfat->sect_size;
+	dev_offset = exfat_c2o(exfat, exfat->disk_bitmap_clus);
+	bitmap_bytes = EXFAT_BITMAP_SIZE(le32_to_cpu(exfat->bs->bsx.clu_count));
 
-	bd = fsck->buffer_desc;
-	idx = 0;
+	disk_b = (bitmap_t *)exfat->disk_bitmap;
+	alloc_b = (bitmap_t *)exfat->alloc_bitmap;
+	ohead_b = (bitmap_t *)exfat->ohead_bitmap;
 
-	while (offset < last_offset) {
-		if (FSCK_NEED_CANCEL())
-			return -ECANCELED;
+	for (i = 0; i < bitmap_bytes / sizeof(bitmap_t); i++)
+		ohead_b[i] = alloc_b[i] | disk_b[i];
 
-		len = MIN(read_size, last_offset - offset);
-		if (exfat_read(exfat->blk_dev->dev_fd, bd[idx].buffer,
-				len, offset) != (ssize_t)len)
-			return -EIO;
-
-		for (i = 0; i < len; i += write_size) {
-			size = MIN(write_size, len - i);
-			if (memcmp(&bd[idx].buffer[i],
-					exfat->alloc_bitmap + bitmap_offset + i,
-					size)) {
-				if (exfat_write(exfat->blk_dev->dev_fd,
-					exfat->alloc_bitmap + bitmap_offset + i,
-					size, offset + i) != size)
-					return -EIO;
-			}
+	i = 0;
+	while (i < bitmap_bytes / sizeof(bitmap_t)) {
+		if (ohead_b[i] == disk_b[i]) {
+			i++;
+			continue;
 		}
 
-		idx ^= 0x01;
-		offset += len;
-		bitmap_offset += len;
+		byte_offset = ((i * sizeof(bitmap_t)) / 512) * 512;
+		write_bytes = MIN(512, bitmap_bytes - byte_offset);
+
+		if (exfat_write(exfat->blk_dev->dev_fd,
+				(char *)ohead_b + byte_offset, write_bytes,
+				dev_offset + byte_offset) != (ssize_t)write_bytes)
+			return -EIO;
+
+		i = (byte_offset + write_bytes) / sizeof(bitmap_t);
 	}
 	return 0;
-}
-
-static int free_unused_clusters(struct exfat_fsck *fsck)
-{
-	int err;
-
-	err = write_dirty_bitmap(fsck);
-	if (err)
-		exfat_err("failed to write bitmap\n");
-	return err;
 }
 
 /*
@@ -1562,7 +1543,6 @@ int main(int argc, char * const argv[])
 			ui.options |= FSCK_OPTS_REPAIR_AUTO;
 			break;
 		case 's':
-			ui.options |= FSCK_OPTS_RESCUE_CLUS;
 			break;
 		case 'V':
 			version_only = true;
@@ -1665,10 +1645,12 @@ int main(int argc, char * const argv[])
 		exfat_fsck.dirty_fat = true;
 	}
 
-	if (exfat_fsck.dirty_fat) {
-		ret = free_unused_clusters(&exfat_fsck);
-		if (ret)
+	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) {
+		ret = write_dirty_bitmap(&exfat_fsck);
+		if (ret) {
+			exfat_err("failed to write bitmap\n");
 			goto out;
+		}
 	}
 
 	if (ui.ei.writeable && fsync(bd.dev_fd)) {

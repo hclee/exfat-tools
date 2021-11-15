@@ -153,8 +153,7 @@ struct exfat *exfat_alloc_exfat(struct exfat_blk_dev *blk_dev, struct pbr *bs)
 		goto err;
 	}
 
-	exfat->disk_bitmap = (char *)malloc(
-				EXFAT_BITMAP_SIZE(exfat->clus_count));
+	exfat->disk_bitmap = calloc(1, EXFAT_BITMAP_SIZE(exfat->clus_count));
 	if (!exfat->disk_bitmap) {
 		exfat_err("failed to allocate bitmap\n");
 		goto err;
