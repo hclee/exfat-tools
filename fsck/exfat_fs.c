@@ -34,7 +34,7 @@ void exfat_bitmap_set_range(struct exfat *exfat, char *bitmap,
 	clus_t clus;
 
 	if (!heap_clus(exfat, start_clus) ||
-		!heap_clus(exfat, start_clus + count))
+		!heap_clus(exfat, start_clus + count - 1))
 		return;
 
 	clus = start_clus;
