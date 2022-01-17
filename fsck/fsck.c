@@ -687,7 +687,7 @@ static int read_file_dentry_set(struct exfat_de_iter *iter,
 		if (repair_file_ask(iter, NULL, ER_DE_CHECKSUM,
 				    "the checksum of a file is wrong"))
 			need_delete = true;
-		*skip_dentries = file_de->file_num_ext + 1;
+		*skip_dentries = 1;
 		goto skip_dset;
 	}
 
@@ -696,7 +696,7 @@ static int read_file_dentry_set(struct exfat_de_iter *iter,
 				    "a file has too few secondary count. %d",
 				    file_de->file_num_ext))
 			need_delete = true;
-		*skip_dentries = file_de->file_num_ext + 1;
+		*skip_dentries = 1;
 		goto skip_dset;
 	}
 
