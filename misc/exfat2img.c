@@ -581,7 +581,7 @@ int main(int argc, const char *argv[])
 		goto out;
 	}
 
-	last_sect = le32_to_cpu(ei.exfat->bs->bsx.clu_offset) +
+	last_sect = (off_t)le32_to_cpu(ei.exfat->bs->bsx.clu_offset) +
 		(le32_to_cpu(ei.exfat->bs->bsx.clu_count) <<
 		 ei.exfat->bs->bsx.sect_per_clus_bits) - 1;
 	err = dump_sectors(&ei, last_sect, last_sect + 1);
