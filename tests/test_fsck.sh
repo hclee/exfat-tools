@@ -4,7 +4,8 @@ TESTCASE_DIR=$1
 NEED_LOOPDEV=$2
 IMAGE_FILE=exfat.img
 FSCK_PROG=fsck.exfat
-FSCK_OPTS=-y
+FSCK_PROG_2=fsck.exfat
+FSCK_OPTS="-y -s"
 PASS_COUNT=0
 
 cleanup() {
@@ -40,7 +41,7 @@ for TESTCASE_DIR in $TESTCASE_DIRS; do
 
 	# Run fsck for repair
 	$FSCK_PROG $FSCK_OPTS "$DEV_FILE"
-	if [ $? -ne 1 ]; then
+	if [ $? -ne 1 ] && [ $? -ne 0 ]; then
 		echo ""
 		echo "Failed to repair ${TESTCASE_DIR}"
 		if [ $NEED_LOOPDEV ]; then
@@ -51,7 +52,7 @@ for TESTCASE_DIR in $TESTCASE_DIRS; do
 
 	echo ""
 	# Run fsck again
-	$FSCK_PROG -n "$DEV_FILE"
+	$FSCK_PROG_2 "$DEV_FILE"
 	if [ $? -ne 0 ]; then
 		echo ""
 		echo "Failed, corrupted ${TESTCASE_DIR}"
@@ -59,20 +60,6 @@ for TESTCASE_DIR in $TESTCASE_DIRS; do
 			losetup -d "${DEV_FILE}"
 		fi
 		cleanup
-	fi
-
-	if [ -e "${TESTCASE_DIR}/exfat.img.expected.xz" ]; then
-		EXPECTED_FILE=${IMAGE_FILE}.expected
-		unxz -cfk "${TESTCASE_DIR}/${EXPECTED_FILE}.xz" > "${EXPECTED_FILE}"
-		diff <(xxd "${IMAGE_FILE}") <(xxd "${EXPECTED_FILE}")
-		if [ $? -ne 0 ]; then
-			echo ""
-			echo "Failed ${TESTCASE_DIR}"
-			if [ $NEED_LOOPDEV ]; then
-				losetup -d "${DEV_FILE}"
-			fi
-			cleanup
-		fi
 	fi
 
 	echo ""
