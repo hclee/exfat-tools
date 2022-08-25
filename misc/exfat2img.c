@@ -569,8 +569,8 @@ out:
 	return ret;
 }
 
-static int dump_bytes_to_stdout(struct exfat2img *ei,
-				off_t start, off_t end_excl, bool fill_zero)
+static ssize_t dump_bytes_to_stdout(struct exfat2img *ei,
+				    off_t start, off_t end_excl, bool fill_zero)
 {
 	struct exfat *exfat = ei->exfat;
 	size_t len, total_len = 0;
@@ -618,7 +618,7 @@ static int dump_bytes_to_stdout(struct exfat2img *ei,
 		ei->stdout_offset += len;
 		exfat_stat.written_bytes += len;
 	}
-	return total_len;
+	return (ssize_t)total_len;
 }
 
 static int dump_to_stdout(struct exfat2img *ei)
