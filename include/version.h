@@ -6,6 +6,6 @@
 #ifndef _VERSION_H
 
 #define EXFAT_PROGS_VERSION "1.1.2"
-#define WEBOS_EXFAT_PROGS_VERSION "webos-1.1.2-11"
+#define WEBOS_EXFAT_PROGS_VERSION "webos-1.1.2-12"
 
 #endif /* !_VERSION_H */
