@@ -898,7 +898,8 @@ static int read_file_dentry_set(struct exfat_de_iter *iter,
 	if (!node)
 		return -ENOMEM;
 
-	for (i = 2; i <= file_de->file_num_ext; i++) {
+	for (i = 2; i <= MAX(file_de->file_num_ext,
+			     EXFAT_NAME_MAX/ENTRY_NAME_MAX + 1); i++) {
 		ret = exfat_de_iter_get(iter, i, &dentry);
 		if (ret || dentry->type != EXFAT_NAME) {
 			if (i > 2 && repair_file_ask(iter, NULL, ER_DE_NAME,
