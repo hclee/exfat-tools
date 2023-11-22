@@ -745,7 +745,8 @@ static int read_file_dentry_set(struct exfat_de_iter *iter,
 	checksum = file_calc_checksum(iter);
 	if (checksum != le16_to_cpu(file_de->file_checksum)) {
 		if (repair_file_ask(iter, NULL, ER_DE_CHECKSUM,
-				    "the checksum of a file is wrong"))
+				    "the checksum %#x of a file is wrong, expected: %#x",
+				    checksum, le16_to_cpu(file_de->file_checksum)))
 			need_delete = true;
 		*skip_dentries = 1;
 		goto skip_dset;
