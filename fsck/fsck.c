@@ -565,21 +565,24 @@ restore:
 	return ret;
 }
 
-static uint16_t file_calc_checksum(struct exfat_de_iter *iter)
+static int file_calc_checksum(struct exfat_de_iter *iter, uint16_t *checksum)
 {
-	uint16_t checksum;
 	struct exfat_dentry *file_de, *de;
-	int i;
+	int i, ret;
 
-	checksum = 0;
-	exfat_de_iter_get(iter, 0, &file_de);
+	*checksum = 0;
+	ret = exfat_de_iter_get(iter, 0, &file_de);
+	if (ret)
+		return ret;
 
-	exfat_calc_dentry_checksum(file_de, &checksum, true);
+	exfat_calc_dentry_checksum(file_de, checksum, true);
 	for (i = 1; i <= file_de->file_num_ext; i++) {
-		exfat_de_iter_get(iter, i, &de);
-		exfat_calc_dentry_checksum(de, &checksum, false);
+		ret = exfat_de_iter_get(iter, i, &de);
+		if (ret)
+			return ret;
+		exfat_calc_dentry_checksum(de, checksum, false);
 	}
-	return checksum;
+	return 0;
 }
 
 /*
@@ -624,7 +627,9 @@ static int check_inode(struct exfat_de_iter *iter, struct exfat_inode *node)
 		valid = false;
 	}
 
-	checksum = file_calc_checksum(iter);
+	ret = file_calc_checksum(iter, &checksum);
+	if (ret)
+		return ret;
 	exfat_de_iter_get(iter, 0, &dentry);
 	if (checksum != le16_to_cpu(dentry->file_checksum)) {
 		exfat_de_iter_get_dirty(iter, 0, &dentry);
@@ -742,8 +747,8 @@ static int read_file_dentry_set(struct exfat_de_iter *iter,
 		return -EINVAL;
 	}
 
-	checksum = file_calc_checksum(iter);
-	if (checksum != le16_to_cpu(file_de->file_checksum)) {
+	ret = file_calc_checksum(iter, &checksum);
+	if (ret || checksum != le16_to_cpu(file_de->file_checksum)) {
 		if (repair_file_ask(iter, NULL, ER_DE_CHECKSUM,
 				    "the checksum of a file is wrong"))
 			need_delete = true;
