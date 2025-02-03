@@ -494,9 +494,9 @@ free_sector:
 	return ret;
 }
 
-static int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
-				   struct pbr **bs,
-				   bool ignore_bad_fs_name)
+int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
+			    struct pbr **bs,
+			    bool ignore_bad_fs_name)
 {
 	struct pbr *boot_sect;
 	unsigned int sect_size;

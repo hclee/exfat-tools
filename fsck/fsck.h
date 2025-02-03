@@ -34,4 +34,8 @@ struct exfat_fsck {
 
 off_t exfat_c2o(struct exfat *exfat, unsigned int clus);
 
+int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
+			    struct pbr **bs,
+			    bool ignore_bad_fs_name);
+
 #endif
