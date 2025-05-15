@@ -21,11 +21,6 @@
 #include "fsck.h"
 #include "upcase_table.h"
 
-struct fsck_user_input {
-	struct exfat_user_input		ei;
-	enum fsck_ui_options		options;
-};
-
 #define EXFAT_MAX_UPCASE_CHARS	0x10000
 
 #define FSCK_EXIT_NO_ERRORS		0x00
@@ -1679,17 +1674,112 @@ static void exfat_show_info(struct exfat_fsck *fsck, const char *dev_name)
 			exfat_stat.fixed_count);
 }
 
-int main(int argc, char * const argv[])
+int exfat_fsck_main(struct fsck_user_input *ui)
 {
-	struct fsck_user_input ui;
 	struct exfat_blk_dev bd;
 	struct pbr *bs = NULL;
 	struct exfat_inode *root;
-	int c, ret, exit_code;
+	int ret, exit_code;
+
+	memset(&bd, 0, sizeof(bd));
+	ret = exfat_get_blk_dev_info(&ui->ei, &bd);
+	if (ret < 0) {
+		exfat_err("failed to open %s. %d\n", ui->ei.dev_name, ret);
+		return FSCK_EXIT_OPERATION_ERROR;
+	}
+
+	ret = exfat_boot_region_check(&bd, &bs,
+				      ui->options & FSCK_OPTS_IGNORE_BAD_FS_NAME ?
+				      true : false);
+	if (ret)
+		goto err;
+
+	root = exfat_alloc_inode(ATTR_SUBDIR);
+	if (!root) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	exfat_fsck.exfat = exfat_alloc_exfat(&bd, bs, root);
+	if (!exfat_fsck.exfat) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	exfat_fsck.buffer_desc = exfat_alloc_buffer(exfat_fsck.exfat);
+	if (!exfat_fsck.buffer_desc) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	if ((exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) &&
+	    exfat_mark_volume_dirty(exfat_fsck.exfat, true)) {
+		ret = -EIO;
+		goto err;
+	}
+
+	exfat_debug("verifying root directory...\n");
+	ret = exfat_root_dir_check(&exfat_fsck);
+	if (ret) {
+		exfat_err("failed to verify root directory.\n");
+		goto out;
+	}
+
+	exfat_debug("verifying directory entries...\n");
+	ret = exfat_filesystem_check(&exfat_fsck);
+	if (ret)
+		goto out;
+
+	if (exfat_fsck.options & FSCK_OPTS_RESCUE_CLUS) {
+		rescue_orphan_clusters(&exfat_fsck);
+		exfat_fsck.dirty = true;
+		exfat_fsck.dirty_fat = true;
+	}
+
+	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) {
+		ret = write_bitmap(&exfat_fsck);
+		if (ret) {
+			exfat_err("failed to write bitmap\n");
+			goto out;
+		}
+	}
+
+	if (ui->ei.writeable && fsync(bd.dev_fd)) {
+		exfat_err("failed to sync\n");
+		ret = -EIO;
+		goto out;
+	}
+	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE)
+		exfat_mark_volume_dirty(exfat_fsck.exfat, false);
+
+out:
+	exfat_show_info(&exfat_fsck, ui->ei.dev_name);
+err:
+	if (ret && ret != -EINVAL)
+		exit_code = FSCK_EXIT_OPERATION_ERROR;
+	else if (ret == -EINVAL ||
+		 exfat_stat.error_count != exfat_stat.fixed_count)
+		exit_code = FSCK_EXIT_ERRORS_LEFT;
+	else if (exfat_fsck.dirty)
+		exit_code = FSCK_EXIT_CORRECTED;
+	else
+		exit_code = FSCK_EXIT_NO_ERRORS;
+
+	if (exfat_fsck.buffer_desc)
+		exfat_free_buffer(exfat_fsck.exfat, exfat_fsck.buffer_desc);
+	if (exfat_fsck.exfat)
+		exfat_free_exfat(exfat_fsck.exfat);
+	close(bd.dev_fd);
+	return exit_code;
+}
+
+int main(int argc, char * const argv[])
+{
+	struct fsck_user_input ui;
+	int c;
 	bool version_only = false;
 
 	memset(&ui, 0, sizeof(ui));
-	memset(&bd, 0, sizeof(bd));
 
 	print_level = EXFAT_ERROR;
 
@@ -1757,95 +1847,7 @@ int main(int argc, char * const argv[])
 	}
 
 	exfat_fsck.options = ui.options;
-
 	ui.ei.dev_name = argv[optind];
-	ret = exfat_get_blk_dev_info(&ui.ei, &bd);
-	if (ret < 0) {
-		exfat_err("failed to open %s. %d\n", ui.ei.dev_name, ret);
-		return FSCK_EXIT_OPERATION_ERROR;
-	}
 
-	ret = exfat_boot_region_check(&bd, &bs,
-				      ui.options & FSCK_OPTS_IGNORE_BAD_FS_NAME ?
-				      true : false);
-	if (ret)
-		goto err;
-
-	root = exfat_alloc_inode(ATTR_SUBDIR);
-	if (!root) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	exfat_fsck.exfat = exfat_alloc_exfat(&bd, bs, root);
-	if (!exfat_fsck.exfat) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	exfat_fsck.buffer_desc = exfat_alloc_buffer(exfat_fsck.exfat);
-	if (!exfat_fsck.buffer_desc) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	if ((exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) &&
-	    exfat_mark_volume_dirty(exfat_fsck.exfat, true)) {
-		ret = -EIO;
-		goto err;
-	}
-
-	exfat_debug("verifying root directory...\n");
-	ret = exfat_root_dir_check(&exfat_fsck);
-	if (ret) {
-		exfat_err("failed to verify root directory.\n");
-		goto out;
-	}
-
-	exfat_debug("verifying directory entries...\n");
-	ret = exfat_filesystem_check(&exfat_fsck);
-	if (ret)
-		goto out;
-
-	if (exfat_fsck.options & FSCK_OPTS_RESCUE_CLUS) {
-		rescue_orphan_clusters(&exfat_fsck);
-		exfat_fsck.dirty = true;
-		exfat_fsck.dirty_fat = true;
-	}
-
-	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) {
-		ret = write_bitmap(&exfat_fsck);
-		if (ret) {
-			exfat_err("failed to write bitmap\n");
-			goto out;
-		}
-	}
-
-	if (ui.ei.writeable && fsync(bd.dev_fd)) {
-		exfat_err("failed to sync\n");
-		ret = -EIO;
-		goto out;
-	}
-	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE)
-		exfat_mark_volume_dirty(exfat_fsck.exfat, false);
-
-out:
-	exfat_show_info(&exfat_fsck, ui.ei.dev_name);
-err:
-	if (ret && ret != -EINVAL)
-		exit_code = FSCK_EXIT_OPERATION_ERROR;
-	else if (ret == -EINVAL ||
-		 exfat_stat.error_count != exfat_stat.fixed_count)
-		exit_code = FSCK_EXIT_ERRORS_LEFT;
-	else if (exfat_fsck.dirty)
-		exit_code = FSCK_EXIT_CORRECTED;
-	else
-		exit_code = FSCK_EXIT_NO_ERRORS;
-
-	if (exfat_fsck.buffer_desc)
-		exfat_free_buffer(exfat_fsck.exfat, exfat_fsck.buffer_desc);
-	if (exfat_fsck.exfat)
-		exfat_free_exfat(exfat_fsck.exfat);
-	close(bd.dev_fd);
-	return exit_code;
+	return exfat_fsck_main(&ui);
 }

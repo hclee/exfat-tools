@@ -18,6 +18,11 @@ enum fsck_ui_options {
 	FSCK_OPTS_RESCUE_CLUS	= 0x20,
 };
 
+struct fsck_user_input {
+	struct exfat_user_input		ei;
+	enum fsck_ui_options		options;
+};
+
 struct exfat;
 struct exfat_inode;
 
@@ -34,6 +39,7 @@ struct exfat_fsck {
 
 off_t exfat_c2o(struct exfat *exfat, unsigned int clus);
 
+int exfat_fsck_main(struct fsck_user_input *ui);
 int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
 			    struct pbr **bs,
 			    bool ignore_bad_fs_name);
