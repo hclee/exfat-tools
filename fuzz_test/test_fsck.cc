@@ -21,10 +21,14 @@ extern "C" {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
 	const char *filename = "/tmp/exfat_test_file";
+#if 0
+#else
+	char filepath[PATH_MAX];
+#endif
 	int fd, ret;
 	struct fsck_user_input ui;
 
-#if 1
+#if 0
 	fd = open(filename, O_RDWR|O_CREAT|O_TRUNC);
 #else
 	fd = syscall(SYS_memfd_create, filename, 0);
@@ -41,7 +45,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	}
 
 	memset(&ui, 0, sizeof(ui));
+#if 0
 	ui.ei.dev_name = filename;
+#else
+	snprintf(filepath, sizeof(filepath), "/proc/self/fd/%d", fd);
+	ui.ei.dev_name = filepath;
+#endif
 	ui.ei.writeable = true;
 	ui.options = (enum fsck_ui_options)(FSCK_OPTS_REPAIR_YES | FSCK_OPTS_REPAIR_WRITE);
 
