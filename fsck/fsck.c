@@ -1684,6 +1684,7 @@ int exfat_fsck_main(struct fsck_user_input *ui)
 	exfat_fsck.buffer_desc = NULL;
 	exfat_fsck.exfat = NULL;
 	exfat_fsck.options = ui->options;
+	memset(&exfat_stat, 0, sizeof(exfat_stat));
 
 	memset(&bd, 0, sizeof(bd));
 	ret = exfat_get_blk_dev_info(&ui->ei, &bd);
