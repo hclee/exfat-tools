@@ -1681,6 +1681,10 @@ int exfat_fsck_main(struct fsck_user_input *ui)
 	struct exfat_inode *root;
 	int ret, exit_code;
 
+	exfat_fsck.buffer_desc = NULL;
+	exfat_fsck.exfat = NULL;
+	exfat_fsck.options = ui->options;
+
 	memset(&bd, 0, sizeof(bd));
 	ret = exfat_get_blk_dev_info(&ui->ei, &bd);
 	if (ret < 0) {
@@ -1846,7 +1850,6 @@ int main(int argc, char * const argv[])
 		ui.ei.writeable = false;
 	}
 
-	exfat_fsck.options = ui.options;
 	ui.ei.dev_name = argv[optind];
 
 	return exfat_fsck_main(&ui);
