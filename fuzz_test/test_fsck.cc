@@ -4,6 +4,8 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <linux/memfd.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -16,12 +18,17 @@ extern "C" {
 #include "fsck.h"
 }
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
+{
 	const char *filename = "/tmp/exfat_test_file";
-	int fd;
+	int fd, ret;
 	struct fsck_user_input ui;
 
+#if 1
 	fd = open(filename, O_RDWR|O_CREAT|O_TRUNC);
+#else
+	fd = syscall(SYS_memfd_create, filename, 0);
+#endif
 	if (fd < 0) {
 		perror("open");
 		return 1;
@@ -32,12 +39,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 		close(fd);
 		return 1;
 	}
-	close(fd);
 
 	memset(&ui, 0, sizeof(ui));
 	ui.ei.dev_name = filename;
-	ui.ei.writeable = false;
-	ui.options = FSCK_OPTS_REPAIR_NO;
+	ui.ei.writeable = true;
+	ui.options = (enum fsck_ui_options)(FSCK_OPTS_REPAIR_YES | FSCK_OPTS_REPAIR_WRITE);
 
-	return exfat_fsck_main(&ui);
+	ret = exfat_fsck_main(&ui);
+
+	close(fd);
+	return ret;
 }
