@@ -21,6 +21,8 @@ extern "C" {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
 	const char *filename = "/tmp/exfat_test_file";
+	int null_fd, stdout_fd;
+
 #if 0
 #else
 	char filepath[PATH_MAX];
@@ -44,6 +46,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		return 1;
 	}
 
+
+	print_level = 0;
+
+	null_fd = open("/dev/null", O_WRONLY);
+	stdout_fd = dup(STDOUT_FILENO);
+	dup2(null_fd, STDOUT_FILENO);
+
 	memset(&ui, 0, sizeof(ui));
 #if 0
 	ui.ei.dev_name = filename;
@@ -55,7 +64,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	ui.options = (enum fsck_ui_options)(FSCK_OPTS_REPAIR_YES | FSCK_OPTS_REPAIR_WRITE);
 
 	ret = exfat_fsck_main(&ui);
+	
+	fflush(stdout);
+	dup2(stdout_fd, STDOUT_FILENO);
+	close(null_fd);
+	close(stdout_fd);
 
 	close(fd);
-	return ret;
+	return 0;
 }
