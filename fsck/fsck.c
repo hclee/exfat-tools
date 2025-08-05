@@ -519,6 +519,11 @@ int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
 	sect_size = 1 << boot_sect->bsx.sect_size_bits;
 	free(boot_sect);
 
+	if (sect_size < 512 || sect_size > EXFAT_MAX_SECTOR_SIZE) {
+		exfat_err("invalid sector size: %u\n", sect_size);
+		return -EINVAL;
+	}
+
 	/* check boot regions */
 	ret = read_boot_region(blkdev, bs,
 			       BOOT_SEC_IDX, sect_size, true);
