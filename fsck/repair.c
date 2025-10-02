@@ -229,8 +229,10 @@ static int generate_rename(struct exfat_de_iter *iter, __le16 *utf16_name,
 			 iter->invalid_name_num++);
 		err = exfat_lookup_file(iter->exfat, iter->parent, rename,
 					&filter);
-		if (!err)
+		if (!err) {
+			free(filter.out.dentry_set);
 			continue;
+		}
 		break;
 	}
 
