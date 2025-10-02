@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 # 사용자 정의 가능: 기본 corpus 루트 디렉토리 (기본=fuzz_test_0)
 : "${CORPUS_ROOT:=test_all_fuzz}"
@@ -28,10 +28,13 @@ if (( TOTAL == 0 )); then
   exit 1
 fi
 
-rm run_all_fuzz.log
 
 # 선택적: 개별 실행 중 profraw 백업
+export LLVM_PROFILE_FILE="fuzz_coverage.profraw"
 mkdir -p coverage_raw
+
+rm run_all_fuzz.log >& /dev/null
+rm fuzz_coverage.profraw >& /dev/null
 
 for i in "${!DIRS[@]}"; do
   DIR="${DIRS[$i]}"
@@ -56,17 +59,13 @@ for i in "${!DIRS[@]}"; do
       mv "${CORPUS_DIR}/exfat.img" "${CORPUS_DIR}/${IDX}_$(basename "${DIR}").img"
   fi
 
-  # 3) 이전 fuzz_coverage.profraw 백업 (있으면)
-  if [ -f fuzz_coverage.profraw ]; then
-      mv fuzz_coverage.profraw "coverage_raw/pre_${IDX}.profraw"
-  fi
-
   # 4) 퍼저 실행
   echo "[INFO] Running fuzzer: ${RUN_FUZZER_CMD}"
-  ./test_fsck fuzz_test/corpus -runs=1000000 \
+  ./test_fsck ${CORPUS_DIR} -runs=4096 \
 	  -max_len=5242880 -len_control=0 -prefer_small=0 \
 	  -print_pcs=1 -print_final_stats=1 -ignore_crashes=1 -dump_coverage=1 \
-	  | tee -a run_all_fuzz.log
+	  -reduce_inputs=0 -merge=0 \
+	  2>&1 | tee -a run_all_fuzz.log
   if [ ! $? ]; then
       echo "[ERROR] Fuzzer 실행 실패 (디렉토리: $DIR)"
       exit 1
@@ -77,18 +76,14 @@ for i in "${!DIRS[@]}"; do
       cp fuzz_coverage.profraw "coverage_raw/${IDX}_$(basename "$DIR").profraw"
   fi
 
-  # 5) 커버리지 병합
-  echo "[INFO] Merging coverage: ${MERGE_CMD}"
-  if ! ${MERGE_CMD}; then
-      echo "[ERROR] merge_coverage.sh 실패 (디렉토리: $DIR)"
-      exit 1
-  fi
-
   echo "[INFO] 완료: [$IDX/$TOTAL] $DIR"
 done
 
 echo
 echo "[INFO] 모든 테스트 디렉토리 처리 완료. 최종 커버리지 리포트 생성 시도."
+
+  # 5) 커버리지 병합
+llvm-profdata merge -sparse coverage_raw/*.profraw -o fuzz_coverage.profdata
 
 ./report_coverage.sh
 
