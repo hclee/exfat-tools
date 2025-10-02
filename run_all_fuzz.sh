@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eo pipefail
+#set -eo pipefail
 
 # 사용자 정의 가능: 기본 corpus 루트 디렉토리 (기본=fuzz_test_0)
 : "${CORPUS_ROOT:=test_all_fuzz}"
@@ -14,17 +14,55 @@ set -eo pipefail
 
 echo "[INFO] CORPUS_ROOT=${CORPUS_ROOT}"
 
-# tests 하위 1단계 디렉토리 중 exfat.img.tar.xz 보유한 것만
-mapfile -t DIRS < <(find ./tests -mindepth 1 -maxdepth 1 -type d -print0 \
-  | while IFS= read -r -d '' d; do
-        if [ -f "$d/exfat.img.tar.xz" ]; then
-            printf '%s\n' "$d"
-        fi
-    done | sort)
+usage() {
+  cat <<EOF
+Usage: $0 [TEST_DIR]
+
+Without arguments, iterate every immediate subdirectory of ./tests that contains exfat.img.tar.xz.
+With TEST_DIR (e.g. ./tests/2tb_disk) only that directory is processed.
+
+Environment variables:
+  CORPUS_ROOT        Target corpus root directory (default: fuzz_test_0)
+  RUN_FUZZER_CMD     (현재 스크립트에서는 직접 test_fsck 실행, 향후 확장용)
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+DIRS=()
+if [[ $# -ge 1 ]]; then
+  TARGET_DIR="$1"
+  if [[ ! -d "$TARGET_DIR" ]]; then
+    echo "[ERROR] 지정한 경로가 디렉토리가 아닙니다: $TARGET_DIR" >&2
+    exit 1
+  fi
+  if [[ ! -f "$TARGET_DIR/exfat.img.tar.xz" ]]; then
+    echo "[ERROR] 지정한 디렉토리에 exfat.img.tar.xz 가 없습니다: $TARGET_DIR" >&2
+    exit 1
+  fi
+  # Normalize to no trailing slash
+  TARGET_DIR="${TARGET_DIR%/}"
+  DIRS+=("$TARGET_DIR")
+else
+  # tests 하위 1단계 디렉토리 중 exfat.img.tar.xz 보유한 것만
+  mapfile -t DIRS < <(find ./tests -mindepth 1 -maxdepth 1 -type d -print0 \
+    | while IFS= read -r -d '' d; do
+          if [ -f "$d/exfat.img.tar.xz" ]; then
+              printf '%s\n' "$d"
+          fi
+      done | sort)
+fi
 
 TOTAL=${#DIRS[@]}
 if (( TOTAL == 0 )); then
-  echo "[ERROR] exfat.img.tar.xz 를 가진 테스트 디렉토리가 없습니다."
+  if [[ $# -ge 1 ]]; then
+    echo "[ERROR] 처리할 수 있는 테스트 디렉토리가 없습니다 (검증 실패)." >&2
+  else
+    echo "[ERROR] exfat.img.tar.xz 를 가진 테스트 디렉토리가 없습니다." >&2
+  fi
   exit 1
 fi
 
