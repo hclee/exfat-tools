@@ -5,3 +5,9 @@ upcase_bin_DATA = \
 
 libexec_SCRIPTS = exfat-uctbl2bin.sh
 upcase_bindir = $(docdir)
+
+EXTRA_DIST = \
+	exfat-uctbl2bin.sh \
+	upcase-mandatory.txt \
+	upcase-null.txt \
+	upcase-recommended.txt
