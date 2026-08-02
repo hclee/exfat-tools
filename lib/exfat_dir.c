@@ -212,15 +212,17 @@ static ssize_t read_block(struct exfat_de_iter *iter, unsigned int block)
 		return ret;
 
 	/*
-	 * if a buffer is filled with dentries, read blocks ahead of time,
-	 * otherwise read blocks of the next directory in advance.
+	 * Keep reading ahead the blocks of the current directory:
+	 * a block filled with EXFAT_LAST entries no longer means we are
+	 * done reading this directory.
 	 */
-	if (desc->buffer[iter->read_size - 32] != EXFAT_LAST)
-		read_ahead_next_blocks(iter,
-				(block * iter->read_size) / exfat->clus_size,
-				(block * iter->read_size) % exfat->clus_size,
-				desc->p_clus);
-	else
+	read_ahead_next_blocks(iter,
+			(block * iter->read_size) / exfat->clus_size,
+			(block * iter->read_size) % exfat->clus_size,
+			desc->p_clus);
+
+	/* start warming up the next directory once this one is about to end */
+	if ((uint64_t)(block + 1) * iter->read_size >= iter->parent->size)
 		read_ahead_next_dir_blocks(iter);
 	return ret;
 }
